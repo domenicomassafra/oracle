@@ -414,6 +414,7 @@ export function createGeminiWebExecutor(
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
         let response: GeminiWebResponse;
+        let effectiveModel = model;
 
         try {
           if (editImagePath) {
@@ -434,6 +435,7 @@ export function createGeminiWebExecutor(
               chatMetadata: intro.metadata,
               signal: controller.signal,
             });
+            effectiveModel = out.effectiveModel;
             response = {
               text: out.text ?? null,
               thoughts: geminiOptions.showThoughts ? out.thoughts : null,
@@ -464,6 +466,7 @@ export function createGeminiWebExecutor(
               chatMetadata: null,
               signal: controller.signal,
             });
+            effectiveModel = out.effectiveModel;
             response = {
               text: out.text ?? null,
               thoughts: geminiOptions.showThoughts ? out.thoughts : null,
@@ -492,6 +495,7 @@ export function createGeminiWebExecutor(
               chatMetadata: null,
               signal: controller.signal,
             });
+            effectiveModel = out.effectiveModel;
             response = {
               text: out.text ?? null,
               thoughts: geminiOptions.showThoughts ? out.thoughts : null,
@@ -516,6 +520,7 @@ export function createGeminiWebExecutor(
         }
 
         const tookMs = Date.now() - startTime;
+        log?.(`[gemini-web] Effective model: ${effectiveModel}`);
         log?.(`[gemini-web] Completed in ${tookMs}ms`);
 
         return {
@@ -524,6 +529,15 @@ export function createGeminiWebExecutor(
           tookMs,
           answerTokens: estimateTokenCount(answerText),
           answerChars: answerText.length,
+          modelSelection: {
+            requestedModel: model,
+            resolvedLabel: effectiveModel,
+            strategy: "select",
+            status: effectiveModel === model ? "already-selected" : "switched-best-effort",
+            verified: true,
+            source: "gemini-web-client",
+            capturedAt: new Date().toISOString(),
+          },
         };
       },
     };

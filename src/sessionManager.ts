@@ -130,7 +130,7 @@ export interface BrowserModelSelectionEvidence {
   strategy?: BrowserModelStrategy;
   status: BrowserModelSelectionEvidenceStatus;
   verified: boolean;
-  source: "chatgpt-model-picker" | "config";
+  source: "chatgpt-model-picker" | "gemini-web-client" | "config";
   capturedAt: string;
 }
 
