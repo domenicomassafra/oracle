@@ -124,6 +124,22 @@ describe("copied-profile launch flags", () => {
 });
 
 describe("hidden-window launch flags", () => {
+  test("selects Wayland for visible Linux Chrome sessions", async () => {
+    const { buildChromeFlagsForTest } = await import("../../src/browser/chromeLifecycle.js");
+    const flags = buildChromeFlagsForTest(false, undefined, false, {
+      platform: "linux",
+      waylandDisplay: "wayland-0",
+    });
+
+    expect(flags).toContain("--ozone-platform=wayland");
+    expect(
+      buildChromeFlagsForTest(true, undefined, false, {
+        platform: "linux",
+        waylandDisplay: "wayland-0",
+      }),
+    ).not.toContain("--ozone-platform=wayland");
+  });
+
   test("keeps macOS Chrome rendered in an off-screen window", async () => {
     const { buildChromeFlagsForTest } = await import("../../src/browser/chromeLifecycle.js");
     const flags = buildChromeFlagsForTest(false, undefined, true);

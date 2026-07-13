@@ -724,6 +724,10 @@ function buildChromeFlags(
   headless: boolean,
   debugBindAddress?: string | null,
   hideWindow = false,
+  runtime: { platform: NodeJS.Platform; waylandDisplay?: string } = {
+    platform: process.platform,
+    waylandDisplay: process.env.WAYLAND_DISPLAY,
+  },
 ): string[] {
   const flags = [
     "--disable-background-networking",
@@ -762,7 +766,9 @@ function buildChromeFlags(
 
   if (headless) {
     flags.push("--headless=new");
-  } else if (hideWindow && process.platform === "darwin") {
+  } else if (runtime.platform === "linux" && runtime.waylandDisplay) {
+    flags.push("--ozone-platform=wayland");
+  } else if (hideWindow && runtime.platform === "darwin") {
     // Cmd-H stops macOS Chrome from compositing the page, which can swallow
     // trusted CDP clicks and retain the prompt as a draft. Keeping the window
     // off-screen avoids desktop disruption while preserving normal rendering.
@@ -782,8 +788,9 @@ export function buildChromeFlagsForTest(
   headless: boolean,
   debugBindAddress?: string | null,
   hideWindow = false,
+  runtime?: { platform: NodeJS.Platform; waylandDisplay?: string },
 ): string[] {
-  return buildChromeFlags(headless, debugBindAddress, hideWindow);
+  return buildChromeFlags(headless, debugBindAddress, hideWindow, runtime);
 }
 
 function resolveChromeLaunchOptions(
