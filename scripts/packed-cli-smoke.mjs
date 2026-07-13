@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,16 +27,11 @@ try {
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", join(tmpRoot, tarball)], {
     cwd: installDir,
   });
-  const cliPath = join(
-    installDir,
-    "node_modules",
-    "@steipete",
-    "oracle",
-    "dist",
-    "bin",
-    "oracle-cli.js",
-  );
-  const help = run(process.execPath, [cliPath, "--help", "--verbose"], { cwd: installDir });
+  const binDir = join(installDir, "node_modules", ".bin");
+  const cliPath = join(binDir, "oracle");
+  accessSync(cliPath, constants.X_OK);
+  accessSync(join(binDir, "oracle-mcp"), constants.X_OK);
+  const help = run(cliPath, ["--help", "--verbose"], { cwd: installDir });
 
   for (const expected of [
     "--no-azure",
