@@ -28,7 +28,12 @@ async function readSessionLogTail(sessionId: string, maxBytes: number): Promise<
 import { performSessionRun } from "../../cli/sessionRunner.js";
 import { runDryRunSummary } from "../../cli/dryRun.js";
 import { CHATGPT_URL } from "../../browser/constants.js";
-import { CONSULT_PRESETS, browserThinkingTimeRawSchema, consultInputSchema } from "../types.js";
+import {
+  CONSULT_PRESETS,
+  browserThinkingTimeRawSchema,
+  consultInputSchema,
+  type ConsultInput,
+} from "../types.js";
 import { applyConsultPreset } from "../consultPresets.js";
 import { loadUserConfig, type UserConfig } from "../../config.js";
 import { resolveNotificationSettings } from "../../cli/notifier.js";
@@ -494,6 +499,26 @@ export function formatConsultDryRunResolved(details: ConsultDryRunResolved): str
 
 type McpLoggingServer = Pick<McpServer["server"], "sendLoggingMessage">;
 
+export function enforceMcpEnginePolicy(
+  input: ConsultInput,
+  env: NodeJS.ProcessEnv = process.env,
+): ConsultInput {
+  if (env.ORACLE_MCP_ENGINE_POLICY !== "browser-only") {
+    return input;
+  }
+  if (input.engine && input.engine !== "browser") {
+    throw new Error(
+      'This Oracle MCP server is browser-only; engine:"api" is disabled by the operator.',
+    );
+  }
+  if (input.models && input.models.length > 0) {
+    throw new Error(
+      "This Oracle MCP server is browser-only; API multi-model fan-out is disabled by the operator.",
+    );
+  }
+  return { ...input, engine: "browser" };
+}
+
 export async function runConsultTool(
   input: unknown,
   { server }: { server: McpLoggingServer },
@@ -501,7 +526,7 @@ export async function runConsultTool(
   const textContent = (text: string) => [{ type: "text" as const, text }];
   let parsedInput;
   try {
-    parsedInput = applyConsultPreset(consultInputSchema.parse(input));
+    parsedInput = enforceMcpEnginePolicy(applyConsultPreset(consultInputSchema.parse(input)));
   } catch (error) {
     return {
       isError: true,

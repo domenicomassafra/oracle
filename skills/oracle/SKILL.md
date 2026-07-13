@@ -10,6 +10,11 @@ model can answer with real repository context through the API or browser. A
 prompt is required; attach files only when they add necessary context. Treat
 responses as advisory and verify them against the codebase and tests.
 
+When an operator exposes a shared subscription-backed browser through MCP,
+respect its engine policy. `ORACLE_MCP_ENGINE_POLICY=browser-only` means API
+engine requests and multi-model fan-out are intentionally unavailable; do not
+work around that boundary or retry through a paid provider route.
+
 ## Main use case (browser, GPT-5.6)
 
 Use browser mode with GPT-5.6 when the ChatGPT account exposes it. GPT-5.6 Sol

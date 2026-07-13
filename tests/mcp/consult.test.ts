@@ -10,6 +10,7 @@ import { setOracleHomeDirOverrideForTest } from "../../src/oracleHome.js";
 import {
   buildConsultBrowserConfig,
   buildConsultDryRunResolved,
+  enforceMcpEnginePolicy,
   formatConsultDryRunResolved,
   registerConsultTool,
   summarizeArtifactsForConsult,
@@ -18,6 +19,29 @@ import {
 } from "../../src/mcp/tools/consult.ts";
 
 describe("summarizeModelRunsForConsult", () => {
+  test("enforces an operator-configured browser-only MCP boundary", () => {
+    const env = { ORACLE_MCP_ENGINE_POLICY: "browser-only" };
+
+    expect(enforceMcpEnginePolicy({ prompt: "review", files: [] }, env)).toMatchObject({
+      engine: "browser",
+    });
+    expect(() =>
+      enforceMcpEnginePolicy({ prompt: "review", files: [], engine: "api" }, env),
+    ).toThrow(/browser-only.*api.*disabled/i);
+    expect(() =>
+      enforceMcpEnginePolicy(
+        { prompt: "review", files: [], models: ["gpt-5.5", "gemini-3-pro"] },
+        env,
+      ),
+    ).toThrow(/browser-only.*multi-model.*disabled/i);
+  });
+
+  test("does not narrow ordinary MCP servers without the operator policy", () => {
+    expect(
+      enforceMcpEnginePolicy({ prompt: "review", files: [], engine: "api" }, {}),
+    ).toMatchObject({ engine: "api" });
+  });
+
   test("applies the ChatGPT Pro Heavy consult preset as overridable defaults", () => {
     expect(
       applyConsultPreset({
