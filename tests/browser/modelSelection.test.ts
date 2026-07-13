@@ -1579,6 +1579,9 @@ describe("browser model selection matchers", () => {
     expect(expression).toContain("const textFallbackMenus = menus.filter(");
     expect(expression).toContain("return pickerMenus.concat(textFallbackMenus);");
     expect(expression).toContain("const menus = queryPickerMenus();");
+    expect(expression).toContain(
+      "if (pickerMenus.length === 0) return menus.filter(hasModelLikeMenuText);",
+    );
     expect(expression).toContain("const menuOpen = queryPickerMenus().length > 0;");
   });
 
