@@ -30,6 +30,29 @@ const CAN_LISTEN_LOCALHOST =
 
 describe("remote browser service", () => {
   test.skipIf(!CAN_LISTEN_LOCALHOST)(
+    "does not expose configured tokens or advertise unreachable interfaces",
+    async () => {
+      const logs: string[] = [];
+      const server = await createRemoteServer({
+        host: "127.0.0.1",
+        port: 0,
+        token: "configured-test-token",
+        logger: (message) => logs.push(message),
+      });
+
+      try {
+        const output = logs.join("\n");
+        expect(output).toContain(`Listening at 127.0.0.1:${server.port}`);
+        expect(output).not.toContain("also [");
+        expect(output).toContain("Access token: configured (hidden)");
+        expect(output).not.toContain("configured-test-token");
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  test.skipIf(!CAN_LISTEN_LOCALHOST)(
     "streams logs and returns results via client executor",
     async () => {
       const tmpDir = await mkdtemp(path.join(os.tmpdir(), "oracle-remote-test-"));
