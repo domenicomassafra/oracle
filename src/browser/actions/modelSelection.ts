@@ -1094,7 +1094,7 @@ function buildModelSelectionExpression(
     const queryPickerMenus = () => {
       const menus = Array.from(document.querySelectorAll(${menuContainerLiteral}));
       const pickerMenus = menus.filter(hasModelSwitcherItem);
-      if (pickerMenus.length === 0) return menus;
+      if (pickerMenus.length === 0) return menus.filter(hasModelLikeMenuText);
       const textFallbackMenus = menus.filter(
         (menu) => !pickerMenus.includes(menu) && hasModelLikeMenuText(menu),
       );
