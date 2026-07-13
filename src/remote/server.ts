@@ -358,7 +358,12 @@ export async function createRemoteServer(
   const extras = reachable.slice(1);
   const also = extras.length ? `, also [${extras.join(", ")}]` : "";
   logger(color(chalk.cyanBright.bold, `Listening at ${primary}${also}`));
-  logger(color(chalk.yellowBright, `Access token: ${authToken}`));
+  logger(
+    color(
+      chalk.yellowBright,
+      options.token ? "Access token: configured (hidden)" : `Access token: ${authToken}`,
+    ),
+  );
   logger("Leave this terminal running; press Ctrl+C to stop oracle serve.");
 
   return {
@@ -739,6 +744,7 @@ function formatReachableAddresses(bindAddress: string, port: number): string[] {
     } else {
       ipv4.push(`${bindAddress}:${port}`);
     }
+    return [...ipv4, ...ipv6];
   }
   try {
     const interfaces = os.networkInterfaces();
