@@ -950,13 +950,7 @@ async function launchManualLoginChrome(
       port: debugPort,
       userDataDir: profileDir,
       startingUrl: url,
-      chromeFlags: [
-        "--no-first-run",
-        "--no-default-browser-check",
-        `--user-data-dir=${profileDir}`,
-        "--remote-allow-origins=*",
-        `--remote-debugging-port=${debugPort}`, // ensure DevToolsActivePort is written even on Windows
-      ],
+      chromeFlags: buildManualLoginChromeFlags(profileDir, debugPort),
     });
 
     const chosenPort = chrome?.port ?? debugPort ?? null;
@@ -988,4 +982,33 @@ async function launchManualLoginChrome(
       `Unable to open Chrome for manual login (${message}). Launch Chrome manually with --user-data-dir=${profileDir} and log in to ${url}.`,
     );
   }
+}
+
+function buildManualLoginChromeFlags(
+  profileDir: string,
+  debugPort: number,
+  runtime: { platform: NodeJS.Platform; waylandDisplay?: string } = {
+    platform: process.platform,
+    waylandDisplay: process.env.WAYLAND_DISPLAY,
+  },
+): string[] {
+  const flags = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    `--user-data-dir=${profileDir}`,
+    "--remote-allow-origins=*",
+    `--remote-debugging-port=${debugPort}`, // ensure DevToolsActivePort is written even on Windows
+  ];
+  if (runtime.platform === "linux" && runtime.waylandDisplay) {
+    flags.push("--ozone-platform=wayland");
+  }
+  return flags;
+}
+
+export function buildManualLoginChromeFlagsForTest(
+  profileDir: string,
+  debugPort: number,
+  runtime: { platform: NodeJS.Platform; waylandDisplay?: string },
+): string[] {
+  return buildManualLoginChromeFlags(profileDir, debugPort, runtime);
 }

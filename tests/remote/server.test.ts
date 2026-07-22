@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, readdir, rm, writeFile, readFile, stat } from "node:fs/promises";
-import { createRemoteServer } from "../../src/remote/server.js";
+import { buildManualLoginChromeFlagsForTest, createRemoteServer } from "../../src/remote/server.js";
 import { createRemoteBrowserExecutor } from "../../src/remote/client.js";
 import type { BrowserRunResult } from "../../src/browserMode.js";
 import type { RemoteArtifactDescriptor } from "../../src/remote/types.js";
@@ -25,6 +25,26 @@ const CAN_LISTEN_LOCALHOST =
     ],
     { stdio: "ignore" },
   ).status === 0;
+
+describe("manual-login Chrome launch", () => {
+  test("selects Wayland when the Linux service has a Wayland display", () => {
+    const flags = buildManualLoginChromeFlagsForTest("/tmp/oracle-profile", 43333, {
+      platform: "linux",
+      waylandDisplay: "wayland-0",
+    });
+
+    expect(flags).toContain("--ozone-platform=wayland");
+    expect(flags).toContain("--remote-debugging-port=43333");
+  });
+
+  test("does not force Wayland when no Wayland display is available", () => {
+    const flags = buildManualLoginChromeFlagsForTest("/tmp/oracle-profile", 43333, {
+      platform: "linux",
+    });
+
+    expect(flags).not.toContain("--ozone-platform=wayland");
+  });
+});
 
 describe("remote browser service", () => {
   test.skipIf(!CAN_LISTEN_LOCALHOST)(
