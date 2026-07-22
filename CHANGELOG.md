@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Browser/Serve: launch the persistent manual-login Chrome with Wayland on Linux desktop services when `WAYLAND_DISPLAY` is available, so Oracle recovers the signed-in browser profile after reboot instead of timing out on an unavailable X display.
+- Browser/Serve: launch the persistent manual-login Chrome with Wayland on Linux desktop services when `WAYLAND_DISPLAY` is available and safely clear stale profile locks only after the recorded Chrome PID is dead, so Oracle recovers the signed-in browser profile after reboot instead of timing out on an unavailable display or abandoned lock.
 - CLI: avoid inheriting `browser.thinkingTime` from config when `--browser-model-strategy current` is explicit, while preserving an explicit `--browser-thinking-time` override. Thanks @jung0han!
 
 ## 0.16.0 — 2026-07-12

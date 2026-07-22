@@ -423,7 +423,7 @@ export async function serveRemote(options: RemoteServerOptions = {}): Promise<vo
             `Found stale DevToolsActivePort (port ${existingPort}, ${reachable.error}); launching a fresh manual-login Chrome.`,
           );
           await cleanupStaleProfileState(manualProfileDir, console.log, {
-            lockRemovalMode: "never",
+            lockRemovalMode: "if_oracle_pid_dead",
           });
           void launchManualLoginChrome(manualProfileDir, CHATGPT_URL, console.log);
         }
