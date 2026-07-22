@@ -442,6 +442,9 @@ export async function serveRemote(options: RemoteServerOptions = {}): Promise<vo
           void launchManualLoginChrome(manualProfileDir, CHATGPT_URL, console.log);
         }
       } else {
+        await cleanupStaleProfileState(manualProfileDir, console.log, {
+          lockRemovalMode: "if_oracle_pid_dead",
+        });
         void launchManualLoginChrome(manualProfileDir, CHATGPT_URL, console.log);
       }
     } else if (opened) {
