@@ -11,6 +11,7 @@ import {
   buildConsultBrowserConfig,
   buildConsultDryRunResolved,
   enforceMcpEnginePolicy,
+  enforceMcpGptModelPolicy,
   formatConsultDryRunResolved,
   registerConsultTool,
   summarizeArtifactsForConsult,
@@ -40,6 +41,62 @@ describe("summarizeModelRunsForConsult", () => {
     expect(
       enforceMcpEnginePolicy({ prompt: "review", files: [], engine: "api" }, {}),
     ).toMatchObject({ engine: "api" });
+  });
+
+  test("enforces an operator GPT allowlist and safe default before browser execution", () => {
+    const env = {
+      ORACLE_MCP_ALLOWED_GPT_MODELS: "gpt-5.6-sol,gpt-5.5-instant",
+      ORACLE_MCP_DEFAULT_GPT_MODEL: "gpt-5.6-sol",
+      ORACLE_MCP_DEFAULT_GPT_THINKING_TIME: "extended",
+    };
+
+    expect(enforceMcpGptModelPolicy({ prompt: "review", files: [] }, env)).toMatchObject({
+      model: "gpt-5.6-sol",
+      browserThinkingTime: "extended",
+      browserModelStrategy: "select",
+    });
+    expect(
+      enforceMcpGptModelPolicy(
+        {
+          prompt: "review",
+          files: [],
+          model: "gpt-5.6-sol",
+          browserThinkingTime: "standard",
+        },
+        env,
+      ),
+    ).toMatchObject({
+      model: "gpt-5.6-sol",
+      browserThinkingTime: "standard",
+      browserModelStrategy: "select",
+    });
+    expect(
+      enforceMcpGptModelPolicy(
+        { prompt: "review", files: [], model: "gpt-5.5-instant" },
+        { ...env, ORACLE_MCP_DEFAULT_GPT_THINKING_TIME: "" },
+      ),
+    ).toMatchObject({ model: "gpt-5.5-instant", browserModelStrategy: "select" });
+  });
+
+  test("rejects Pro and model-picker bypasses under the operator GPT policy", () => {
+    const env = {
+      ORACLE_MCP_ALLOWED_GPT_MODELS: "gpt-5.6-sol,gpt-5.5-instant",
+      ORACLE_MCP_DEFAULT_GPT_MODEL: "gpt-5.6-sol",
+      ORACLE_MCP_DEFAULT_GPT_THINKING_TIME: "extended",
+    };
+
+    expect(() =>
+      enforceMcpGptModelPolicy({ prompt: "review", files: [], model: "gpt-5.5-pro" }, env),
+    ).toThrow(/disabled by the operator/i);
+    expect(() =>
+      enforceMcpGptModelPolicy(
+        { prompt: "review", files: [], browserModelStrategy: "current" },
+        env,
+      ),
+    ).toThrow(/requires.*select/i);
+    expect(() =>
+      enforceMcpGptModelPolicy({ prompt: "review", files: [], browserModelLabel: "Pro" }, env),
+    ).toThrow(/custom browser model labels.*disabled/i);
   });
 
   test("applies the ChatGPT Pro Heavy consult preset as overridable defaults", () => {
