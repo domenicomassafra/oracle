@@ -519,6 +519,73 @@ export function enforceMcpEnginePolicy(
   return { ...input, engine: "browser" };
 }
 
+export function enforceMcpGptModelPolicy(
+  input: ConsultInput,
+  env: NodeJS.ProcessEnv = process.env,
+): ConsultInput {
+  const configuredAllowlist = env.ORACLE_MCP_ALLOWED_GPT_MODELS;
+  if (configuredAllowlist === undefined) {
+    return input;
+  }
+  const allowedModels = configuredAllowlist
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  if (allowedModels.length === 0) {
+    throw new Error("This Oracle MCP server has an empty GPT model allowlist.");
+  }
+
+  const configuredDefault = env.ORACLE_MCP_DEFAULT_GPT_MODEL?.trim();
+  const model = input.model ?? configuredDefault;
+  if (!model) {
+    throw new Error("This Oracle MCP server requires an operator-configured default GPT model.");
+  }
+  if (!model.startsWith("gpt-")) {
+    return input;
+  }
+  if (!allowedModels.includes(model)) {
+    throw new Error(`GPT model "${model}" is disabled by the operator.`);
+  }
+  if (input.browserModelLabel) {
+    throw new Error(
+      "Custom browser model labels are disabled by the operator; use an allowed GPT model id.",
+    );
+  }
+  if (input.browserModelStrategy && input.browserModelStrategy !== "select") {
+    throw new Error(
+      'The operator GPT policy requires browserModelStrategy:"select" to prevent reuse of a different current model.',
+    );
+  }
+
+  const configuredThinkingTime = env.ORACLE_MCP_DEFAULT_GPT_THINKING_TIME?.trim();
+  const defaultThinkingTime = configuredThinkingTime
+    ? normalizeThinkingTimeLevel(configuredThinkingTime)
+    : undefined;
+  if (configuredThinkingTime && !defaultThinkingTime) {
+    throw new Error(`Invalid operator default GPT thinking time "${configuredThinkingTime}".`);
+  }
+  const browserThinkingTime = input.browserThinkingTime ?? defaultThinkingTime;
+  if (model === "gpt-5.5-instant" && browserThinkingTime) {
+    throw new Error("GPT-5.5 Instant does not accept a browser thinking-time override.");
+  }
+  if (
+    model === "gpt-5.6-sol" &&
+    browserThinkingTime !== "extended" &&
+    browserThinkingTime !== "standard"
+  ) {
+    throw new Error(
+      "GPT-5.6 Sol is restricted by the operator to high (extended) or medium (standard) thinking.",
+    );
+  }
+
+  return {
+    ...input,
+    model,
+    browserModelStrategy: "select",
+    ...(browserThinkingTime ? { browserThinkingTime } : {}),
+  };
+}
+
 export async function runConsultTool(
   input: unknown,
   { server }: { server: McpLoggingServer },
@@ -526,7 +593,9 @@ export async function runConsultTool(
   const textContent = (text: string) => [{ type: "text" as const, text }];
   let parsedInput;
   try {
-    parsedInput = enforceMcpEnginePolicy(applyConsultPreset(consultInputSchema.parse(input)));
+    parsedInput = enforceMcpGptModelPolicy(
+      enforceMcpEnginePolicy(applyConsultPreset(consultInputSchema.parse(input))),
+    );
   } catch (error) {
     return {
       isError: true,

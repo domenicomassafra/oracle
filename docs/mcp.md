@@ -8,6 +8,15 @@ an omitted engine to `browser` and rejects explicit `engine:"api"` and
 multi-model fan-out before creating a session or provider request. This is an
 operator boundary, not a general default for local Oracle installations.
 
+Operators can also set `ORACLE_MCP_ALLOWED_GPT_MODELS` to a comma-separated
+allowlist, plus `ORACLE_MCP_DEFAULT_GPT_MODEL` and optionally
+`ORACLE_MCP_DEFAULT_GPT_THINKING_TIME`. When enabled, Oracle rejects disallowed
+GPT models, custom picker labels, and `current`/`ignore` picker strategies before
+browser execution. It injects the configured default when the request omits a
+model and forces `browserModelStrategy:"select"`, preventing a prior ChatGPT
+conversation's current model from bypassing the policy. Non-GPT browser models
+are unaffected.
+
 ## Let Them Fight
 
 Claude Code can call `oracle-mcp` and ask a subscription-backed ChatGPT browser session for a second opinion. Use the `chatgpt-pro-heavy` preset when you want a compact MCP request that targets ChatGPT browser mode, the current Pro picker alias, and Pro Extended thinking time. The preset is intentionally boring at the API layer: it is a shortcut for existing browser-mode fields, not a new model id.
