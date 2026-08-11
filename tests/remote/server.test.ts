@@ -129,6 +129,15 @@ describe("remote browser service", () => {
               tookMs: 1000,
               answerTokens: 42,
               answerChars: 2,
+              modelSelection: {
+                requestedModel: "gpt-5.6-sol",
+                resolvedLabel: "GPT-5.6 Sol",
+                strategy: "select",
+                status: "switched",
+                verified: true,
+                source: "chatgpt-model-picker",
+                capturedAt: "2026-08-11T00:00:00.000Z",
+              },
             };
             return result;
           },
@@ -159,6 +168,12 @@ describe("remote browser service", () => {
 
       expect(clientLogs.some((entry) => entry.includes("uploading attachment"))).toBe(true);
       expect(result.answerText).toBe("hi");
+      expect(result.modelSelection).toMatchObject({
+        requestedModel: "gpt-5.6-sol",
+        resolvedLabel: "GPT-5.6 Sol",
+        verified: true,
+        source: "chatgpt-model-picker",
+      });
       expect(runLog).toEqual(["remote"]);
 
       const healthUnauthorized = await httpGetJson({
