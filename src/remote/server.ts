@@ -6,7 +6,7 @@ import path from "node:path";
 import net from "node:net";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile, stat, realpath } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, readFile, writeFile, stat, realpath } from "node:fs/promises";
 import chalk from "chalk";
 import type { BrowserAttachment, BrowserLogger, CookieParam } from "../browser/types.js";
 import type { BrowserSessionConfig } from "../sessionManager.js";
@@ -44,6 +44,7 @@ export interface RemoteServerOptions {
   host?: string;
   port?: number;
   token?: string;
+  tokenFile?: string;
   logger?: (message: string) => void;
   manualLoginDefault?: boolean;
   manualLoginProfileDir?: string;
@@ -98,7 +99,7 @@ export async function createRemoteServer(
   const runBrowser = deps.runBrowser ?? runBrowserMode;
   const server = http.createServer();
   const logger = options.logger ?? console.log;
-  const authToken = options.token ?? randomBytes(16).toString("hex");
+  const authToken = await resolveAuthToken(options);
   const startedAt = Date.now();
   const verbose = process.argv.includes("--verbose") || process.env.ORACLE_SERVE_VERBOSE === "1";
   const color = process.stdout.isTTY
@@ -368,7 +369,9 @@ export async function createRemoteServer(
   logger(
     color(
       chalk.yellowBright,
-      options.token ? "Access token: configured (hidden)" : `Access token: ${authToken}`,
+      options.token || options.tokenFile
+        ? "Access token: configured (hidden)"
+        : `Access token: ${authToken}`,
     ),
   );
   logger("Leave this terminal running; press Ctrl+C to stop oracle serve.");
@@ -382,6 +385,19 @@ export async function createRemoteServer(
       });
     },
   };
+}
+
+async function resolveAuthToken(options: RemoteServerOptions): Promise<string> {
+  if (options.token && options.tokenFile) {
+    throw new Error("Use either --token or --token-file, not both.");
+  }
+  if (options.token) return options.token;
+  if (options.tokenFile) {
+    const token = (await readFile(options.tokenFile, "utf8")).trim();
+    if (!token) throw new Error("Service access token file is empty.");
+    return token;
+  }
+  return randomBytes(16).toString("hex");
 }
 
 export async function serveRemote(options: RemoteServerOptions = {}): Promise<void> {

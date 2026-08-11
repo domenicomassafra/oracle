@@ -76,6 +76,25 @@ describe("remote browser service", () => {
     },
   );
 
+  test.skipIf(!CAN_LISTEN_LOCALHOST)("reads a configured token from a file", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "oracle-token-file-test-"));
+    const tokenFile = path.join(tmpDir, "serve.token");
+    await writeFile(tokenFile, "file-backed-token\n", { mode: 0o600 });
+    const server = await createRemoteServer({
+      host: "127.0.0.1",
+      port: 0,
+      tokenFile,
+      logger: () => {},
+    });
+
+    try {
+      expect(server.token).toBe("file-backed-token");
+    } finally {
+      await server.close();
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(!CAN_LISTEN_LOCALHOST)(
     "streams logs and returns results via client executor",
     async () => {
