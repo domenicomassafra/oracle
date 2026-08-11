@@ -3021,6 +3021,23 @@ describe("unified Intelligence picker with Advanced -> Effort submenu", () => {
     expect(dom.getSelectedTier()).toBe("Extra High");
   });
 
+  it("selects the requested tier in the Italian Intelligence picker", async () => {
+    const dom = buildDom("Medium");
+    dom.advancedToggle.textContent = "Avanzate";
+    dom.effortOpener.textContent = "SforzoMedio";
+    dom.tierRows[0]!.textContent = "Istantaneo";
+    dom.tierRows[1]!.textContent = "Medio";
+    dom.tierRows[2]!.textContent = "Alto";
+    dom.tierRows[3]!.textContent = "Molto alto";
+    dom.tierRows[4]!.textContent = "Pro";
+
+    await expect(run(dom.documentStub, "extended")).resolves.toEqual({
+      status: "switched",
+      label: "Alto",
+    });
+    expect(dom.getSelectedTier()).toBe("High");
+  });
+
   it("never lands on Pro when a lower tier was requested", async () => {
     const dom = buildDom("Pro");
     await run(dom.documentStub, "extended");
