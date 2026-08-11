@@ -960,6 +960,7 @@ program
   .option("--host <address>", "Interface to bind (default 0.0.0.0).")
   .option("--port <number>", "Port to listen on (default random).", parseIntOption)
   .option("--token <value>", "Access token clients must provide (random if omitted).")
+  .option("--token-file <path>", "Read the service access token from a file.")
   .option(
     "--manual-login",
     "Use a dedicated Chrome profile for manual login (recommended when cookie sync is unavailable).",
@@ -980,6 +981,7 @@ program
       host: commandOptions.host,
       port: commandOptions.port,
       token: commandOptions.token,
+      tokenFile: commandOptions.tokenFile,
       manualLoginDefault: commandOptions.manualLogin,
       manualLoginProfileDir: commandOptions.manualLoginProfileDir,
       cookieSyncDefault: commandOptions.browserCookieSync,
