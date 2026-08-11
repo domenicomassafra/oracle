@@ -576,17 +576,16 @@ export function enforceMcpGptModelPolicy(
   if (configuredThinkingTime && !defaultThinkingTime) {
     throw new Error(`Invalid operator default GPT thinking time "${configuredThinkingTime}".`);
   }
-  const browserThinkingTime = input.browserThinkingTime ?? defaultThinkingTime;
-  if (model === "gpt-5.5-instant" && browserThinkingTime) {
-    throw new Error("GPT-5.5 Instant does not accept a browser thinking-time override.");
-  }
+  const browserThinkingTime =
+    normalizeThinkingTimeLevel(input.browserThinkingTime) ?? defaultThinkingTime;
   if (
     model === "gpt-5.6-sol" &&
     browserThinkingTime !== "extended" &&
-    browserThinkingTime !== "standard"
+    browserThinkingTime !== "standard" &&
+    browserThinkingTime !== "light"
   ) {
     throw new Error(
-      "GPT-5.6 Sol is restricted by the operator to high (extended) or medium (standard) thinking.",
+      "GPT-5.6 Sol is restricted by the operator to high (extended), medium (standard), or instant (light) thinking.",
     );
   }
 

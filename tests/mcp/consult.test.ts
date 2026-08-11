@@ -45,7 +45,7 @@ describe("summarizeModelRunsForConsult", () => {
 
   test("enforces an operator GPT allowlist and safe default before browser execution", () => {
     const env = {
-      ORACLE_MCP_ALLOWED_GPT_MODELS: "gpt-5.6-sol,gpt-5.5-instant",
+      ORACLE_MCP_ALLOWED_GPT_MODELS: "gpt-5.6-sol",
       ORACLE_MCP_DEFAULT_GPT_MODEL: "gpt-5.6-sol",
       ORACLE_MCP_DEFAULT_GPT_THINKING_TIME: "extended",
     };
@@ -72,15 +72,24 @@ describe("summarizeModelRunsForConsult", () => {
     });
     expect(
       enforceMcpGptModelPolicy(
-        { prompt: "review", files: [], model: "gpt-5.5-instant" },
-        { ...env, ORACLE_MCP_DEFAULT_GPT_THINKING_TIME: "" },
+        {
+          prompt: "review",
+          files: [],
+          model: "gpt-5.6-sol",
+          browserThinkingTime: "light",
+        },
+        env,
       ),
-    ).toMatchObject({ model: "gpt-5.5-instant", browserModelStrategy: "select" });
+    ).toMatchObject({
+      model: "gpt-5.6-sol",
+      browserThinkingTime: "light",
+      browserModelStrategy: "select",
+    });
   });
 
   test("rejects Pro and model-picker bypasses under the operator GPT policy", () => {
     const env = {
-      ORACLE_MCP_ALLOWED_GPT_MODELS: "gpt-5.6-sol,gpt-5.5-instant",
+      ORACLE_MCP_ALLOWED_GPT_MODELS: "gpt-5.6-sol",
       ORACLE_MCP_DEFAULT_GPT_MODEL: "gpt-5.6-sol",
       ORACLE_MCP_DEFAULT_GPT_THINKING_TIME: "extended",
     };
