@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { BrowserLogger } from "../browser/types.js";
 
 export type GeminiWebModelId =
-  | "gemini-3.1-flash-lite"
-  | "gemini-3.5-flash"
+  | "gemini-3.5-flash-lite"
+  | "gemini-3.6-flash"
   | "gemini-3.1-pro"
   | "gemini-3-pro-deep-think";
 
 export const DEFAULT_GEMINI_WEB_MODEL: GeminiWebModelId = "gemini-3.1-pro";
-export const FALLBACK_GEMINI_WEB_MODEL: GeminiWebModelId = "gemini-3.1-flash-lite";
+export const FALLBACK_GEMINI_WEB_MODEL: GeminiWebModelId = "gemini-3.5-flash-lite";
 
 interface GeminiWebModelSpec {
   hash: string;
@@ -17,23 +17,23 @@ interface GeminiWebModelSpec {
 }
 
 const MODEL_SPECS: Record<GeminiWebModelId, GeminiWebModelSpec> = {
-  "gemini-3.1-flash-lite": {
-    hash: "1d44b34bcaa1c04d",
+  "gemini-3.5-flash-lite": {
+    hash: "cf41b0e0dd7d53e5",
     modelCode: 6,
     thinkingCode: 1,
   },
-  "gemini-3.5-flash": {
-    hash: "56fdd199312815e2",
+  "gemini-3.6-flash": {
+    hash: "fbb127bbb056c959",
     modelCode: 1,
     thinkingCode: 1,
   },
   "gemini-3.1-pro": {
-    hash: "797f3d0293f288ad",
+    hash: "9d8ca3786ebdfbea",
     modelCode: 3,
     thinkingCode: 1,
   },
   "gemini-3-pro-deep-think": {
-    hash: "797f3d0293f288ad",
+    hash: "9d8ca3786ebdfbea",
     modelCode: 3,
     thinkingCode: 3,
   },
@@ -85,11 +85,11 @@ export function resolveGeminiWebModel(
     case "gemini-3-pro":
     case "gemini-3.0-pro":
       return "gemini-3.1-pro";
-    case "gemini-3.5-flash":
-      return "gemini-3.5-flash";
-    case "gemini-3.1-flash-lite":
-    case "gemini-3.1-flashlite":
-      return "gemini-3.1-flash-lite";
+    case "gemini-3.6-flash":
+      return "gemini-3.6-flash";
+    case "gemini-3.5-flash-lite":
+    case "gemini-3.5-flashlite":
+      return "gemini-3.5-flash-lite";
     case "gemini-3-deep-think":
     case "gemini-3-pro-deep-think":
     case "gemini-3-pro-deepthink":
@@ -98,7 +98,7 @@ export function resolveGeminiWebModel(
     case "gemini-2.5-pro":
       return "gemini-3.1-pro";
     case "gemini-2.5-flash":
-      return "gemini-3.1-flash-lite";
+      return "gemini-3.5-flash-lite";
     default:
       if (normalized.startsWith("gemini-") || normalized.includes("gemini")) {
         log?.(

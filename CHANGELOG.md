@@ -54,6 +54,8 @@ select the right model _and_ the Pro effort tier.
 
 ### Fixed
 
+- Gemini Web: refresh the signed-in model mapping to the current 3.5 Flash-Lite, 3.6 Flash, and 3.1 Pro picker entries instead of silently resolving the new names to retired models.
+
 - Browser: navigate ChatGPT's unified picker, where the model version lives under Advanced → Model and effort under Advanced → Effort. The `gpt-5.5-pro` family of aliases now resolves to the GPT-5.5 model with Pro thinking time instead of failing against the removed flat menu; an explicit `--browser-thinking-time` still wins (#362, thanks @shivamiitgoa).
 - Security: restrict existing and newly created session transcripts, model metadata, and browser artifacts to the current user, without following symlinks during upgrade hardening. Thanks @bunlongheng!
 - Browser/Serve: launch the persistent manual-login Chrome with Wayland on Linux desktop services when `WAYLAND_DISPLAY` is available and safely clear stale profile locks only after the recorded Chrome PID is dead, so Oracle recovers the signed-in browser profile after reboot instead of timing out on an unavailable display or abandoned lock.
