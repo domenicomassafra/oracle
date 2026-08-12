@@ -108,6 +108,17 @@ describe("registerTerminationHooks", () => {
 });
 
 describe("copied-profile launch flags", () => {
+  test("uses the named profile for a manual-login account", async () => {
+    const { resolveChromeLaunchProfileForTest } =
+      await import("../../src/browser/chromeLifecycle.js");
+    expect(
+      resolveChromeLaunchProfileForTest({
+        manualLogin: true,
+        manualLoginChromeProfile: "Profile 1",
+      }),
+    ).toBe("Profile 1");
+  });
+
   test("strips mock keychain flags while retaining custom-host launch flags", async () => {
     const { resolveChromeLaunchOptionsForTest } =
       await import("../../src/browser/chromeLifecycle.js");

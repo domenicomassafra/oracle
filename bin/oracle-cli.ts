@@ -2165,6 +2165,7 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       }
       options.browserManualLogin = true;
       options.browserManualLoginProfileDir = account.profileDir;
+      options.browserManualLoginChromeProfile = account.chromeProfile;
       console.log(
         chalk.dim(
           `Using named ${account.provider} browser profile [redacted] with ${capability} capability.`,

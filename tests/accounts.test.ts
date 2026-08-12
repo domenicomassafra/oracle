@@ -153,6 +153,49 @@ describe("Oracle browser accounts", () => {
         model: "gemini-3.6-flash",
         capability: "text",
       }),
-    ).toThrow(/cannot share one profile/);
+    ).toThrow(/cannot share one Chrome profile/);
+  });
+
+  test("allows distinct named Chrome profiles in one user-data directory", () => {
+    const sharedRoot: UserConfig = {
+      accountPool: {
+        defaults: { claude: "claude" },
+        accounts: {
+          chatgpt: {
+            providers: ["chatgpt"],
+            profileDir: "/profiles/shared",
+            capabilities: ["text"],
+          },
+          claude: {
+            providers: ["claude"],
+            profileDir: "/profiles/shared",
+            chromeProfile: "Profile 1",
+            capabilities: ["text"],
+          },
+        },
+      },
+    };
+    expect(
+      resolveBrowserAccount({ config: sharedRoot, model: "claude-sonnet-5", capability: "text" }),
+    ).toMatchObject({ chromeProfile: "Profile 1" });
+  });
+
+  test("rejects a Chrome profile path", () => {
+    const invalid: UserConfig = {
+      accountPool: {
+        defaults: { chatgpt: "one" },
+        accounts: {
+          one: {
+            providers: ["chatgpt"],
+            profileDir: "/one",
+            chromeProfile: "../other",
+            capabilities: ["text"],
+          },
+        },
+      },
+    };
+    expect(() =>
+      resolveBrowserAccount({ config: invalid, model: "gpt-5.6-sol", capability: "text" }),
+    ).toThrow(/must be a Chrome profile name/);
   });
 });

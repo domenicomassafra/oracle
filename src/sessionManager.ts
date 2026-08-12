@@ -74,6 +74,8 @@ export interface BrowserSessionConfig {
   remoteChrome?: { host: string; port: number } | null;
   manualLogin?: boolean;
   manualLoginProfileDir?: string | null;
+  /** Named Chrome profile inside the manual-login user-data directory. */
+  manualLoginChromeProfile?: string | null;
   manualLoginCookieSync?: boolean;
   /** Copy this signed-in Chrome user-data dir to a throwaway profile and run against it (login-free). */
   copyProfileSource?: string | null;
