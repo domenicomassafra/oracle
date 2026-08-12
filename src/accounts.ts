@@ -6,6 +6,8 @@ export type AccountCapability = "text" | "image";
 
 export interface BrowserAccountConfig {
   providers: Array<"chatgpt" | "gemini" | "claude" | "grok">;
+  /** Owner-facing name for the isolated Chrome profile; distinct from the account id. */
+  profile?: string;
   profileDir: string;
   capabilities: AccountCapability[];
   enabled?: boolean;
@@ -20,6 +22,7 @@ export interface AccountPoolConfig {
 export interface ResolvedBrowserAccount {
   id: string;
   provider: BrowserAccountConfig["providers"][number];
+  profile: string | null;
   profileDir: string;
   capabilities: AccountCapability[];
 }
@@ -44,17 +47,21 @@ export function resolveBrowserAccount(input: {
   config: UserConfig;
   model: string;
   requestedAccount?: string;
+  requestedProfile?: string;
   capability: AccountCapability;
 }): ResolvedBrowserAccount | null {
   const provider = providerForModel(input.model);
   const pool = input.config.accountPool;
   if (!pool?.accounts || Object.keys(pool.accounts).length === 0) {
-    if (input.requestedAccount) {
+    if (input.requestedAccount || input.requestedProfile) {
       throw new Error(
-        `Oracle account pool is not configured; cannot select ${input.requestedAccount}.`,
+        `Oracle account pool is not configured; cannot select ${input.requestedAccount ?? input.requestedProfile}.`,
       );
     }
     return null;
+  }
+  if (input.requestedAccount?.trim() && input.requestedProfile?.trim()) {
+    throw new Error("Choose either an Oracle account or profile, not both.");
   }
   const resolvedProfiles = new Map<string, string>();
   for (const [id, candidate] of Object.entries(pool.accounts)) {
@@ -67,7 +74,18 @@ export function resolveBrowserAccount(input: {
     }
     resolvedProfiles.set(resolved, id);
   }
-  const accountId = input.requestedAccount?.trim() || pool.defaults?.[provider];
+  const requestedProfile = input.requestedProfile?.trim();
+  const profileMatches = requestedProfile
+    ? Object.entries(pool.accounts).filter(([, candidate]) => candidate.profile === requestedProfile)
+    : [];
+  if (requestedProfile && profileMatches.length === 0) {
+    throw new Error(`No Oracle browser account is mapped to profile ${requestedProfile}.`);
+  }
+  if (requestedProfile && profileMatches.length > 1) {
+    throw new Error(`Oracle profile ${requestedProfile} must map to exactly one account.`);
+  }
+  const accountId =
+    input.requestedAccount?.trim() || profileMatches[0]?.[0] || pool.defaults?.[provider];
   if (!accountId)
     throw new Error(`No default Oracle browser account is configured for ${provider}.`);
   const account = pool.accounts[accountId];
@@ -91,6 +109,7 @@ export function resolveBrowserAccount(input: {
   return {
     id: accountId,
     provider,
+    profile: account.profile?.trim() || null,
     profileDir: resolveProfileDir(account.profileDir),
     capabilities: [...account.capabilities],
   };

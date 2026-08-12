@@ -12,16 +12,19 @@ const config: UserConfig = {
     accounts: {
       "primary-chatgpt": {
         providers: ["chatgpt"],
+        profile: "primary-chatgpt",
         profileDir: "/profiles/chatgpt-primary",
         capabilities: ["text", "image"],
       },
       "primary-gemini": {
         providers: ["gemini"],
+        profile: "primary-gemini",
         profileDir: "/profiles/gemini-primary",
         capabilities: ["text", "image"],
       },
       "text-only-gemini": {
         providers: ["gemini"],
+        profile: "reader",
         profileDir: "/profiles/gemini-text",
         capabilities: ["text"],
       },
@@ -57,6 +60,17 @@ describe("Oracle browser accounts", () => {
       capability: "text",
     });
     expect(primary?.profileDir).not.toBe(secondary?.profileDir);
+  });
+
+  test("selects an account by owner-facing profile", () => {
+    expect(
+      resolveBrowserAccount({
+        config,
+        model: "gemini-3.6-flash",
+        requestedProfile: "reader",
+        capability: "text",
+      }),
+    ).toMatchObject({ id: "text-only-gemini", profile: "reader" });
   });
 
   test("rejects image generation for a text-only account", () => {
@@ -98,6 +112,29 @@ describe("Oracle browser accounts", () => {
         capability: "text",
       }),
     ).toThrow(/does not provide chatgpt/);
+  });
+
+  test("rejects an unknown profile before browser launch", () => {
+    expect(() =>
+      resolveBrowserAccount({
+        config,
+        model: "gemini-3.6-flash",
+        requestedProfile: "missing",
+        capability: "text",
+      }),
+    ).toThrow(/No Oracle browser account is mapped to profile/);
+  });
+
+  test("rejects combined account and profile selection", () => {
+    expect(() =>
+      resolveBrowserAccount({
+        config,
+        model: "gemini-3.6-flash",
+        requestedAccount: "primary-gemini",
+        requestedProfile: "reader",
+        capability: "text",
+      }),
+    ).toThrow(/either an Oracle account or profile/);
   });
 
   test("rejects two account ids sharing one browser profile", () => {

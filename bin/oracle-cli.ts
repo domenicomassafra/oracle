@@ -98,6 +98,7 @@ interface CliOptions extends OptionValues {
   render?: boolean;
   model: string;
   account?: string;
+  profile?: string;
   models?: string[];
   reasoningEffort?: ReasoningEffort;
   reasoningMode?: ReasoningMode;
@@ -447,6 +448,10 @@ program
   .option(
     "--account <id>",
     "Named owner-local browser account from ~/.oracle/config.json (identity is redacted in receipts).",
+  )
+  .option(
+    "--profile <name>",
+    "Owner-facing isolated Chrome profile from ~/.oracle/config.json; cannot be combined with --account.",
   )
   .addOption(
     new Option(
@@ -2153,6 +2158,7 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       config: userConfig,
       model: activeModel,
       requestedAccount: options.account,
+      requestedProfile: options.profile,
       capability,
     });
     if (account) {
@@ -2163,7 +2169,7 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       options.browserManualLoginProfileDir = account.profileDir;
       console.log(
         chalk.dim(
-          `Using named ${account.provider} browser account [redacted] with ${capability} capability.`,
+          `Using named ${account.provider} browser profile [redacted] with ${capability} capability.`,
         ),
       );
     }
