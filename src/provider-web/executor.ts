@@ -114,7 +114,8 @@ async function submitClaude(page: Page, prompt: string): Promise<string> {
   const initialCount = await page.$$eval(".font-claude-response", (nodes) => nodes.length);
   const typed = await page.evaluate((value) => {
     const editor = Array.from(document.querySelectorAll('[contenteditable="true"]')).find(
-      (candidate) => /prompt.*claude|claude.*prompt/i.test(candidate.getAttribute("aria-label") ?? ""),
+      (candidate) =>
+        /prompt.*claude|claude.*prompt/i.test(candidate.getAttribute("aria-label") ?? ""),
     );
     if (!(editor instanceof HTMLElement)) return false;
     editor.focus();
@@ -146,7 +147,10 @@ async function submitClaude(page: Page, prompt: string): Promise<string> {
 
 async function submitGrok(page: Page, prompt: string): Promise<string> {
   await closeGrokOverlays(page);
-  const initialCount = await page.$$eval('[data-testid="assistant-message"]', (nodes) => nodes.length);
+  const initialCount = await page.$$eval(
+    '[data-testid="assistant-message"]',
+    (nodes) => nodes.length,
+  );
   const typed = await page.evaluate((value) => {
     const editor = Array.from(document.querySelectorAll('[contenteditable="true"]')).find(
       (candidate) => /ask grok/i.test(candidate.getAttribute("aria-label") ?? ""),
@@ -182,9 +186,9 @@ async function submitGrok(page: Page, prompt: string): Promise<string> {
   let previous = "";
   let stable = 0;
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const current = await page.$eval(
-      '[data-testid="assistant-message"]:last-of-type',
-      (node) => node.textContent?.trim() ?? "",
+    const current = await page.$$eval(
+      '[data-testid="assistant-message"]',
+      (nodes) => nodes.at(-1)?.textContent?.trim() ?? "",
     );
     stable = current && current === previous ? stable + 1 : 0;
     if (stable >= 2) return current;
