@@ -67,7 +67,7 @@ describe("gemini-web uploads", () => {
       const result = await runGeminiWebOnce({
         prompt: "Describe the attachments.",
         files: [imagePath, textPath],
-        model: "gemini-3.5-flash",
+        model: "gemini-3.5-flash-lite",
         cookieMap: { sid: "cookie" },
       });
 
@@ -94,7 +94,7 @@ describe("gemini-web uploads", () => {
         null,
         null,
         null,
-        "56fdd199312815e2",
+        "cf41b0e0dd7d53e5",
         null,
         null,
         1,
@@ -104,7 +104,7 @@ describe("gemini-web uploads", () => {
         3,
         null,
         null,
-        1,
+        6,
         1,
         expect.stringMatching(/^[0-9A-F-]{36}$/),
       ]);
