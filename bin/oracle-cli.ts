@@ -97,6 +97,7 @@ interface CliOptions extends OptionValues {
   paths?: string[];
   render?: boolean;
   model: string;
+  account?: string;
   models?: string[];
   reasoningEffort?: ReasoningEffort;
   reasoningMode?: ReasoningMode;
@@ -442,6 +443,10 @@ program
     "-m, --model <model>",
     "Model to target (gpt-5.5-pro default). GPT-5.6 aliases gpt-5.6 and gpt-5.6-sol work with the OpenAI API or ChatGPT browser. Browser mode also supports current GPT-5.5/GPT-5.4 targets and legacy Pro aliases; retired GPT-5.2 base/Instant/Thinking aliases are API-only. Other API targets include gpt-5.1-codex, gpt-5.2, gpt-5.2-instant, Gemini, Claude, and custom model IDs.",
     normalizeModelOption,
+  )
+  .option(
+    "--account <id>",
+    "Named owner-local browser account from ~/.oracle/config.json (identity is redacted in receipts).",
   )
   .addOption(
     new Option(
@@ -2139,6 +2144,28 @@ async function runRootCommand(options: CliOptions): Promise<void> {
     }
   }
   const activeModel = resolvedOptions.model;
+  if (engine === "browser") {
+    const { resolveBrowserAccount } = await import("../src/accounts.js");
+    const capability = options.generateImage || options.editImage ? "image" : "text";
+    const account = resolveBrowserAccount({
+      config: userConfig,
+      model: activeModel,
+      requestedAccount: options.account,
+      capability,
+    });
+    if (account) {
+      if (options.browserManualLoginProfileDir) {
+        throw new Error("--account cannot be combined with --browser-manual-login-profile-dir.");
+      }
+      options.browserManualLogin = true;
+      options.browserManualLoginProfileDir = account.profileDir;
+      console.log(
+        chalk.dim(
+          `Using named ${account.provider} browser account [redacted] with ${capability} capability.`,
+        ),
+      );
+    }
+  }
   if (options.reasoningMode && engine !== "api") {
     throw new Error("--reasoning-mode requires --engine api.");
   }
