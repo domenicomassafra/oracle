@@ -9,6 +9,7 @@ import type {
   BrowserResearchMode,
 } from "./browser/types.js";
 import type { ThinkingTimeLevel, ModelOverridesConfig } from "./oracle/types.js";
+import type { AccountPoolConfig } from "./accounts.js";
 
 export type EnginePreference = "api" | "browser";
 
@@ -108,6 +109,8 @@ export interface UserConfig {
    * model traffic.
    */
   modelOverrides?: ModelOverridesConfig;
+  /** Owner-local named browser profiles and capability policy. Never loaded from project config. */
+  accountPool?: AccountPoolConfig;
 }
 
 export const PROJECT_CONFIG_RELATIVE_PATH = path.join(".oracle", "config.json");
