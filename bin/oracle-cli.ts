@@ -1972,22 +1972,21 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   const isClaude = primaryModelCandidate.startsWith("claude");
   const userForcedBrowser = options.browser || options.engine === "browser";
   const browserExplicitlyRequested = browserEngineRequested;
+  const supportsSingleProviderBrowserRun = normalizedMultiModels.length === 0;
   const isBrowserCompatible = (model: string) =>
-    model.startsWith("gpt-") || model.startsWith("gemini");
+    model.startsWith("gpt-") ||
+    model.startsWith("gemini") ||
+    (supportsSingleProviderBrowserRun && (model.startsWith("claude") || model.startsWith("grok")));
   const hasNonBrowserCompatibleTarget =
     normalizedMultiModels.length > 0
       ? normalizedMultiModels.some((model) => !isBrowserCompatible(model))
       : !isBrowserCompatible(resolvedModelCandidate);
   if (browserExplicitlyRequested && hasNonBrowserCompatibleTarget) {
     throw new Error(
-      "Browser engine only supports GPT and Gemini models. Re-run with --engine api for Grok, Claude, or other models.",
+      "Browser engine supports GPT, Gemini, Claude, and Grok web models. Re-run with --engine api for other models.",
     );
   }
   if (engine === "browser" && hasNonBrowserCompatibleTarget) {
-    engine = "api";
-  }
-  if (isClaude && engine === "browser") {
-    console.log(chalk.dim("Browser engine is not supported for Claude models; switching to API."));
     engine = "api";
   }
   if (isCodex && engine === "browser") {
@@ -2302,7 +2301,11 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   ) {
     const { createProviderWebExecutor } = await import("../src/provider-web/index.js");
     browserDeps = { executeBrowser: createProviderWebExecutor() };
-    console.log(chalk.dim(`Using ${activeModel.startsWith("claude") ? "Claude" : "Grok"} web browser automation`));
+    console.log(
+      chalk.dim(
+        `Using ${activeModel.startsWith("claude") ? "Claude" : "Grok"} web browser automation`,
+      ),
+    );
   }
   const remoteExecutionActive = Boolean(browserDeps);
 
