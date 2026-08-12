@@ -77,12 +77,16 @@ export function resolveRunOptionsFromConfig({
       : [apiModel];
   const browserCompatibilityModels: ModelName[] =
     normalizedRequestedModels.length > 0 ? allModels : [browserModel];
-  const isBrowserCompatible = (m: string) => m.startsWith("gpt-") || m.startsWith("gemini");
+  const supportsSingleProviderBrowserRun = normalizedRequestedModels.length === 0;
+  const isBrowserCompatible = (m: string) =>
+    m.startsWith("gpt-") ||
+    m.startsWith("gemini") ||
+    (supportsSingleProviderBrowserRun && (m.startsWith("claude") || m.startsWith("grok")));
   const hasNonBrowserCompatibleTarget =
     browserEngineRequested && browserCompatibilityModels.some((m) => !isBrowserCompatible(m));
   if (hasNonBrowserCompatibleTarget) {
     throw new PromptValidationError(
-      "Browser engine only supports GPT and Gemini models. Re-run with --engine api for Grok, Claude, or other models.",
+      "Browser engine supports GPT, Gemini, Claude, and Grok web models. Re-run with --engine api for other models.",
       { engine: "browser", models: allModels },
     );
   }
@@ -92,11 +96,9 @@ export function resolveRunOptionsFromConfig({
     Boolean(azure?.endpoint) &&
     !browserEngineRequested &&
     allModels.some(isAzureOpenAICandidateModel);
-  const engineCoercedToApi = engineWasBrowser && (isCodex || isClaude || isGrok || azureAutoApi);
+  const engineCoercedToApi = engineWasBrowser && (isCodex || azureAutoApi);
   const fixedEngine: EngineMode =
-    isCodex || isClaude || isGrok || azureAutoApi || normalizedRequestedModels.length > 0
-      ? "api"
-      : resolvedEngine;
+    isCodex || azureAutoApi || normalizedRequestedModels.length > 0 ? "api" : resolvedEngine;
   // Browser runs use ChatGPT picker labels/aliases; API runs must keep API model ids intact.
   const resolvedModel = fixedEngine === "browser" ? browserModel : apiModel;
 

@@ -2293,6 +2293,13 @@ async function runRootCommand(options: CliOptions): Promise<void> {
     if (browserConfig.modelStrategy && browserConfig.modelStrategy !== "select") {
       console.log(chalk.dim("Browser model strategy is ignored for Gemini web runs."));
     }
+  } else if (
+    browserConfig &&
+    (activeModel.startsWith("claude") || activeModel.startsWith("grok"))
+  ) {
+    const { createProviderWebExecutor } = await import("../src/provider-web/index.js");
+    browserDeps = { executeBrowser: createProviderWebExecutor() };
+    console.log(chalk.dim(`Using ${activeModel.startsWith("claude") ? "Claude" : "Grok"} web browser automation`));
   }
   const remoteExecutionActive = Boolean(browserDeps);
 
@@ -2689,6 +2696,17 @@ async function restartSession(sessionId: string, options: RestartCommandOptions)
     if (browserConfig.modelStrategy && browserConfig.modelStrategy !== "select") {
       console.log(chalk.dim("Browser model strategy is ignored for Gemini web runs."));
     }
+  } else if (
+    browserConfig &&
+    (runOptions.model.startsWith("claude") || runOptions.model.startsWith("grok"))
+  ) {
+    const { createProviderWebExecutor } = await import("../src/provider-web/index.js");
+    browserDeps = { executeBrowser: createProviderWebExecutor() };
+    console.log(
+      chalk.dim(
+        `Using ${runOptions.model.startsWith("claude") ? "Claude" : "Grok"} web browser automation`,
+      ),
+    );
   }
   const remoteExecutionActive = Boolean(browserDeps);
 

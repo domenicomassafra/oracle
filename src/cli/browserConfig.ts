@@ -168,9 +168,7 @@ export async function buildBrowserConfig(
     normalizeBrowserModelStrategy(options.browserModelStrategy) ?? DEFAULT_MODEL_STRATEGY;
   const thinkingTime =
     normalizeThinkingTimeLevel(options.browserThinkingTime) ??
-    (modelStrategy === "select" && normalizedBrowserModel === "gpt-5.5-pro"
-      ? "pro"
-      : undefined);
+    (modelStrategy === "select" && normalizedBrowserModel === "gpt-5.5-pro" ? "pro" : undefined);
   assertBrowserModelAvailable(options.model, modelStrategy);
   const cookieNames = parseCookieNames(
     options.browserCookieNames ?? process.env.ORACLE_BROWSER_COOKIE_NAMES,
@@ -205,7 +203,9 @@ export async function buildBrowserConfig(
     ? mapModelToBrowserLabel(options.model)
     : shouldUseOverride
       ? desiredModelOverride
-      : mapModelToBrowserLabel(options.model);
+      : baseModel.startsWith("gemini")
+        ? mapModelToBrowserLabel(options.model)
+        : options.model;
 
   return {
     chromeProfile: options.copyProfile
