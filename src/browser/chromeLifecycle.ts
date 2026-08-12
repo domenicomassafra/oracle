@@ -34,8 +34,9 @@ export async function launchChrome(
   // Keychain-encrypted, so it must launch with the real Keychain (not mocked):
   // strip the keychain-mocking flags from both chrome-launcher's defaults and
   // Oracle's set, and ignore the defaults so they aren't re-added.
-  if (usingCopiedProfile && config.chromeProfile) {
-    chromeFlags.push(`--profile-directory=${config.chromeProfile}`);
+  const selectedProfile = resolveChromeLaunchProfile(config);
+  if (selectedProfile) {
+    chromeFlags.push(`--profile-directory=${selectedProfile}`);
   }
   const launchOptions = resolveChromeLaunchOptions(chromeFlags, usingCopiedProfile);
   const launcher = usePatchedLauncher
@@ -1007,6 +1008,28 @@ export function buildChromeFlagsForTest(
   runtime?: { platform: NodeJS.Platform; waylandDisplay?: string },
 ): string[] {
   return buildChromeFlags(headless, debugBindAddress, hideWindow, runtime);
+}
+
+function resolveChromeLaunchProfile(config: {
+  copyProfileSource?: string | null;
+  chromeProfile?: string | null;
+  manualLogin?: boolean;
+  manualLoginChromeProfile?: string | null;
+}): string | null {
+  return config.copyProfileSource
+    ? (config.chromeProfile ?? null)
+    : config.manualLogin
+      ? (config.manualLoginChromeProfile ?? null)
+      : null;
+}
+
+export function resolveChromeLaunchProfileForTest(config: {
+  copyProfileSource?: string | null;
+  chromeProfile?: string | null;
+  manualLogin?: boolean;
+  manualLoginChromeProfile?: string | null;
+}): string | null {
+  return resolveChromeLaunchProfile(config);
 }
 
 function resolveChromeLaunchOptions(

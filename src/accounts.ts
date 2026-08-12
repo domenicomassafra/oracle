@@ -8,6 +8,8 @@ export interface BrowserAccountConfig {
   providers: Array<"chatgpt" | "gemini" | "claude" | "grok">;
   /** Owner-facing name for the isolated Chrome profile; distinct from the account id. */
   profile?: string;
+  /** Optional named Chrome profile within profileDir (for example, "Profile 1"). */
+  chromeProfile?: string;
   profileDir: string;
   capabilities: AccountCapability[];
   enabled?: boolean;
@@ -23,6 +25,7 @@ export interface ResolvedBrowserAccount {
   id: string;
   provider: BrowserAccountConfig["providers"][number];
   profile: string | null;
+  chromeProfile: string | null;
   profileDir: string;
   capabilities: AccountCapability[];
 }
@@ -41,6 +44,15 @@ function resolveProfileDir(profileDir: string): string {
   if (trimmed === "~") return os.homedir();
   if (trimmed.startsWith("~/")) return path.join(os.homedir(), trimmed.slice(2));
   return path.resolve(trimmed);
+}
+
+function resolveChromeProfile(profile: string | undefined): string | null {
+  const trimmed = profile?.trim();
+  if (!trimmed) return null;
+  if (trimmed === "." || trimmed === ".." || trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("Oracle account chromeProfile must be a Chrome profile name, not a path.");
+  }
+  return trimmed;
 }
 
 export function resolveBrowserAccount(input: {
@@ -66,17 +78,21 @@ export function resolveBrowserAccount(input: {
   const resolvedProfiles = new Map<string, string>();
   for (const [id, candidate] of Object.entries(pool.accounts)) {
     const resolved = resolveProfileDir(candidate.profileDir);
-    const prior = resolvedProfiles.get(resolved);
+    const chromeProfile = resolveChromeProfile(candidate.chromeProfile) ?? "Default";
+    const profileKey = `${resolved}\u0000${chromeProfile}`;
+    const prior = resolvedProfiles.get(profileKey);
     if (prior && prior !== id) {
       throw new Error(
-        `Oracle browser accounts ${prior} and ${id} cannot share one profile directory.`,
+        `Oracle browser accounts ${prior} and ${id} cannot share one Chrome profile.`,
       );
     }
-    resolvedProfiles.set(resolved, id);
+    resolvedProfiles.set(profileKey, id);
   }
   const requestedProfile = input.requestedProfile?.trim();
   const profileMatches = requestedProfile
-    ? Object.entries(pool.accounts).filter(([, candidate]) => candidate.profile === requestedProfile)
+    ? Object.entries(pool.accounts).filter(
+        ([, candidate]) => candidate.profile === requestedProfile,
+      )
     : [];
   if (requestedProfile && profileMatches.length === 0) {
     throw new Error(`No Oracle browser account is mapped to profile ${requestedProfile}.`);
@@ -110,6 +126,7 @@ export function resolveBrowserAccount(input: {
     id: accountId,
     provider,
     profile: account.profile?.trim() || null,
+    chromeProfile: resolveChromeProfile(account.chromeProfile),
     profileDir: resolveProfileDir(account.profileDir),
     capabilities: [...account.capabilities],
   };

@@ -63,6 +63,7 @@ export const DEFAULT_BROWSER_CONFIG: ResolvedBrowserConfig = {
   remoteChromeProfileRoot: null,
   manualLogin: false,
   manualLoginProfileDir: null,
+  manualLoginChromeProfile: null,
   manualLoginCookieSync: false,
   researchMode: "off",
   archiveConversations: "auto",
@@ -156,6 +157,7 @@ export function resolveBrowserConfig(
       config?.resumeConversationUrl ?? DEFAULT_BROWSER_CONFIG.resumeConversationUrl,
     manualLogin,
     manualLoginProfileDir: manualLogin ? resolvedProfileDir : null,
+    manualLoginChromeProfile: manualLogin ? (config?.manualLoginChromeProfile ?? null) : null,
     manualLoginCookieSync:
       config?.manualLoginCookieSync ?? DEFAULT_BROWSER_CONFIG.manualLoginCookieSync,
   };
