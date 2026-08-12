@@ -222,6 +222,12 @@ function isGeminiDeepThinkAlias(normalized: string): boolean {
 
 export function resolveApiModel(modelValue: string): ModelName {
   const normalized = normalizeModelOption(modelValue).toLowerCase();
+  if (normalized.includes("claude") && normalized.includes("sonnet") && normalized.includes("5")) {
+    return "claude-sonnet-5";
+  }
+  if (normalized.includes("claude") && normalized.includes("haiku") && normalized.includes("4.5")) {
+    return "claude-haiku-4.5";
+  }
   if (normalized in MODEL_CONFIGS) {
     return normalized as ModelName;
   }
@@ -332,6 +338,12 @@ export function isGpt56BrowserLabel(modelValue: string): boolean {
 
 export function inferModelFromLabel(modelValue: string): ModelName {
   const normalized = normalizeModelOption(modelValue).toLowerCase();
+  if (normalized.includes("claude") && normalized.includes("sonnet") && normalized.includes("5")) {
+    return "claude-sonnet-5";
+  }
+  if (normalized.includes("claude") && normalized.includes("haiku") && normalized.includes("4.5")) {
+    return "claude-haiku-4.5";
+  }
   if (!normalized) {
     return DEFAULT_MODEL;
   }

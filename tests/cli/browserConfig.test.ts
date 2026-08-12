@@ -2,6 +2,14 @@ import { describe, expect, test, vi } from "vitest";
 import { buildBrowserConfig, resolveBrowserModelLabel } from "../../src/cli/browserConfig.js";
 
 describe("buildBrowserConfig", () => {
+  test.each([
+    ["claude-sonnet-5", "claude-sonnet-5"],
+    ["claude-haiku-4.5", "claude-haiku-4.5"],
+    ["grok-4.1", "grok-4.1"],
+  ])("preserves provider web target %s", async (model, expected) => {
+    const config = await buildBrowserConfig({ model });
+    expect(config.desiredModel).toBe(expected);
+  });
   test("uses defaults when optional flags omitted", async () => {
     const config = await buildBrowserConfig({ model: "gpt-5.5-pro" });
     expect(config).toMatchObject({

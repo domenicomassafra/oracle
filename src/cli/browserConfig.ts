@@ -230,7 +230,9 @@ export async function buildBrowserConfig(
     ? mapModelToBrowserLabel(options.model)
     : shouldUseOverride
       ? desiredModelOverride
-      : mapModelToBrowserLabel(options.model);
+      : baseModel.startsWith("gemini")
+        ? mapModelToBrowserLabel(options.model)
+        : options.model;
 
   return {
     chromeProfile: options.copyProfile

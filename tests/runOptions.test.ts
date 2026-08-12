@@ -499,7 +499,7 @@ describe("resolveRunOptionsFromConfig", () => {
         userConfig: { engine: "browser" },
         env: {},
       }),
-    ).toThrow(/Browser engine only supports GPT and Gemini/);
+    ).toThrow(/Browser engine supports GPT, Gemini, Claude, and Grok/);
   });
 
   it("normalizes shorthand multi-model entries", () => {
@@ -512,27 +512,28 @@ describe("resolveRunOptionsFromConfig", () => {
     expect(runOptions.models).toEqual(["gpt-5.1", "gemini-3-pro", "claude-4.6-sonnet"]);
   });
 
-  it("rejects browser engine for grok when explicitly set", () => {
-    expect(() =>
-      resolveRunOptionsFromConfig({
-        prompt: basePrompt,
-        model: "grok",
-        engine: "browser",
-      }),
-    ).toThrow(/Browser engine only supports GPT and Gemini/);
+  it("keeps browser engine for grok when explicitly set", () => {
+    const result = resolveRunOptionsFromConfig({
+      prompt: basePrompt,
+      model: "grok",
+      engine: "browser",
+    });
+    expect(result.resolvedEngine).toBe("browser");
+    expect(result.runOptions.model).toBe("grok-4.1");
   });
 
-  it("forces api engine for grok when auto-selected browser and applies XAI base url", () => {
+  it("keeps API routing for grok when API is explicitly selected", () => {
     // biome-ignore lint/style/useNamingConvention: env var is uppercase by convention
     const env: NodeJS.ProcessEnv = { XAI_BASE_URL: "https://api.example/v1" } as NodeJS.ProcessEnv;
     const { runOptions, resolvedEngine, engineCoercedToApi } = resolveRunOptionsFromConfig({
       prompt: basePrompt,
       model: "grok",
+      engine: "api",
       env,
     });
     expect(runOptions.model).toBe("grok-4.1");
     expect(resolvedEngine).toBe("api");
-    expect(engineCoercedToApi).toBe(true);
+    expect(engineCoercedToApi).toBe(false);
     expect(runOptions.baseUrl).toBe("https://api.example/v1");
   });
 });
