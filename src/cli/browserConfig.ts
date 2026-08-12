@@ -425,6 +425,10 @@ export function mapModelToBrowserLabel(model: ModelName): string {
 
 export function resolveBrowserModelLabel(input: string | undefined, model: ModelName): string {
   const trimmed = input?.trim?.() ?? "";
+  const normalizedModel = model.toLowerCase();
+  if (normalizedModel.startsWith("claude") || normalizedModel.startsWith("grok")) {
+    return normalizedModel;
+  }
   if (!trimmed) {
     return mapModelToBrowserLabel(model);
   }
