@@ -214,12 +214,12 @@ function buildThinkingTimeExpression(
     const TARGET_MODEL_KIND = ${targetModelKindLiteral};
     const TARGET_IS_GPT56_MODEL = ${targetIsGpt56ModelLiteral};
 
-    // Multilingual matchers: English level token + observed German/Japanese/Chinese variants.
+    // Multilingual matchers: English level token + observed Italian/German/Japanese/Chinese variants.
     const LEVEL_TOKENS = {
-      light: ['light', 'instant', 'sofort', 'leicht', '最速', '轻', '极速'],
-      standard: ['standard', 'medium', 'mittel', '中程度', '标准', '中'],
-      extended: ['extended', 'high', 'hoch', 'erweitert', '高い', '扩展', '深度', '加强', '高'],
-      'extra-high': ['extra high', 'sehr hoch', '非常に高い', '极高'],
+      light: ['light', 'instant', 'istantaneo', 'sofort', 'leicht', '最速', '轻', '极速'],
+      standard: ['standard', 'medium', 'medio', 'mittel', '中程度', '标准', '中'],
+      extended: ['extended', 'high', 'alto', 'hoch', 'erweitert', '高い', '扩展', '深度', '加强', '高'],
+      'extra-high': ['extra high', 'molto alto', 'sehr hoch', '非常に高い', '极高'],
       heavy: ['heavy', 'schwer', '重度', '加重'],
     };
     // Pro is a tier you can request, but it is also a MODEL name, so it must never
