@@ -522,6 +522,20 @@ describe("resolveRunOptionsFromConfig", () => {
     expect(result.runOptions.model).toBe("grok-4.1");
   });
 
+  it.each(["claude-sonnet-5", "claude-haiku-4.5"] as const)(
+    "keeps browser engine for %s with a known provider config",
+    (model) => {
+      const result = resolveRunOptionsFromConfig({
+        prompt: basePrompt,
+        model,
+        engine: "browser",
+      });
+      expect(result.resolvedEngine).toBe("browser");
+      expect(result.runOptions.model).toBe(model);
+      expect(MODEL_CONFIGS[model]).toMatchObject({ provider: "anthropic", pricing: null });
+    },
+  );
+
   it("keeps API routing for grok when API is explicitly selected", () => {
     // biome-ignore lint/style/useNamingConvention: env var is uppercase by convention
     const env: NodeJS.ProcessEnv = { XAI_BASE_URL: "https://api.example/v1" } as NodeJS.ProcessEnv;

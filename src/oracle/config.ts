@@ -244,6 +244,28 @@ export const MODEL_CONFIGS: Record<KnownModelName, ModelConfig> = {
     supportsBackground: false,
     supportsSearch: true,
   },
+  // Browser-only owner surfaces. Their provider-web executor selects these
+  // labels in an authenticated Claude session; no pricing claim is made.
+  "claude-sonnet-5": {
+    model: "claude-sonnet-5",
+    provider: "anthropic",
+    tokenizer: countTokensAnthropic,
+    inputLimit: 200_000,
+    pricing: null,
+    reasoning: null,
+    supportsBackground: false,
+    supportsSearch: false,
+  },
+  "claude-haiku-4.5": {
+    model: "claude-haiku-4.5",
+    provider: "anthropic",
+    tokenizer: countTokensAnthropic,
+    inputLimit: 200_000,
+    pricing: null,
+    reasoning: null,
+    supportsBackground: false,
+    supportsSearch: false,
+  },
   "claude-4.6-sonnet": {
     model: "claude-4.6-sonnet",
     apiModel: "claude-sonnet-4-6",
