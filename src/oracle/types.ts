@@ -18,6 +18,8 @@ export type KnownModelName =
   | "gemini-3.1-pro"
   | "gemini-3.5-flash"
   | "gemini-3-pro"
+  | "claude-sonnet-5"
+  | "claude-haiku-4.5"
   | "claude-4.6-sonnet"
   | "claude-4.1-opus"
   | "grok-4.1";
