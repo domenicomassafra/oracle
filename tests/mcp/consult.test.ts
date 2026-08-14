@@ -332,7 +332,7 @@ describe("summarizeModelRunsForConsult", () => {
     });
   });
 
-  test("lets explicit consult inputs override config defaults", () => {
+  test("retains provider model IDs while explicit consult inputs override config defaults", () => {
     const config = buildConsultBrowserConfig({
       userConfig: {
         browser: {
@@ -363,7 +363,9 @@ describe("summarizeModelRunsForConsult", () => {
       modelStrategy: "current",
       researchMode: "deep",
       archiveConversations: "always",
-      desiredModel: "Claude Sonnet",
+      // Provider-web dispatch resolves Claude/Grok from the stable model ID;
+      // a display label must not replace that identifier before dispatch.
+      desiredModel: "claude-3.7-sonnet",
       cookieSync: false,
     });
   });
