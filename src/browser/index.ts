@@ -2856,6 +2856,20 @@ async function maybeReuseRunningChrome(
     return null;
   }
 
+  // A service/browser restart can retain the DevTools port while replacing the
+  // browser PID.  Keep the port (the actual attachment authority), but refresh
+  // the recorded PID from the process that owns this exact profile.  Otherwise
+  // receipts incorrectly report a dead browser and later session recovery
+  // marks a live conversation as a zombie.
+  const discovered = await findRunningChromeDebugTargetForProfile(userDataDir);
+  if (discovered?.port === port && discovered.pid !== pid) {
+    await writeChromePid(userDataDir, discovered.pid);
+    pid = discovered.pid;
+    logger(
+      `Refreshed shared Chrome ownership for ${userDataDir}; reusing (DevTools port ${port}, pid ${pid})`,
+    );
+  }
+
   logger(
     `Found running Chrome for ${userDataDir}; reusing (DevTools port ${port}${pid ? `, pid ${pid}` : ""})`,
   );

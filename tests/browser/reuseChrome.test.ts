@@ -75,6 +75,39 @@ describe("maybeReuseRunningChrome", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  test("refreshes a dead recorded pid when its DevTools port belongs to the same profile", async () => {
+    if (process.platform === "win32") return;
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-chrome-reuse-"));
+    const port = 46789;
+    const stale = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+    await once(stale, "exit");
+    const current = spawn(
+      process.execPath,
+      [
+        "-e",
+        "setTimeout(() => process.exit(0), 10_000)",
+        "chrome",
+        `--user-data-dir=${tmpDir}`,
+        `--remote-debugging-port=${port}`,
+      ],
+      { stdio: "ignore" },
+    );
+    try {
+      await fs.writeFile(path.join(tmpDir, "DevToolsActivePort"), `${port}\n/devtools/browser`, "utf8");
+      await fs.writeFile(path.join(tmpDir, "chrome.pid"), `${stale.pid ?? 0}\n`, "utf8");
+      const reused = await maybeReuseRunningChromeForTest(tmpDir, noopLogger, {
+        waitForPortMs: 0,
+        probe: vi.fn(async () => ({ ok: true as const })),
+      });
+      expect(reused?.port).toBe(port);
+      expect(reused?.pid).toBe(current.pid);
+      expect(await fs.readFile(path.join(tmpDir, "chrome.pid"), "utf8")).toBe(`${current.pid}\n`);
+    } finally {
+      current.kill();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test.each(reusePaths)(
     "cleans stale locks for %s when a recorded Chrome pid is dead and no DevTools target is reachable",
     async (_label, maybeReuse) => {

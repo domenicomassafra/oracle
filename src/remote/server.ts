@@ -22,6 +22,8 @@ import { getCookies, type Cookie } from "@steipete/sweet-cookie";
 import { CHATGPT_URL } from "../browser/constants.js";
 import { getCliVersion } from "../version.js";
 import { getOracleHomeDir } from "../oracleHome.js";
+import { loadUserConfig } from "../config.js";
+import { resolveBrowserAccount } from "../accounts.js";
 import {
   cleanupStaleProfileState,
   readDevToolsPort,
@@ -73,6 +75,29 @@ const ARTIFACT_CAPABILITIES: RemoteArtifactCapabilities = {
   artifactProtocolVersion: ARTIFACT_PROTOCOL_VERSION,
   maxArtifactBytes: MAX_REMOTE_ARTIFACT_BYTES,
 };
+
+async function resolveRemoteManualLoginAccount(browserConfig: {
+  accountId?: string | null;
+  accountCapability?: "text" | "image";
+  desiredModel?: string | null;
+}) {
+  const accountId = browserConfig.accountId?.trim();
+  if (!accountId) return null;
+  const { config } = await loadUserConfig({ includeProject: false });
+  const account = resolveBrowserAccount({
+    config,
+    model: browserConfig.desiredModel?.trim() || "gpt-5.6-sol",
+    requestedAccount: accountId,
+    capability: browserConfig.accountCapability ?? "text",
+  });
+  if (!account) {
+    throw new Error(`Oracle remote browser account ${accountId} is not configured.`);
+  }
+  if (account.provider !== "chatgpt") {
+    throw new Error(`Oracle remote service only accepts a ChatGPT browser account.`);
+  }
+  return account;
+}
 
 async function findAvailablePort(): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
@@ -286,8 +311,10 @@ export async function createRemoteServer(
 
       // Enforce manual-login profile when cookie sync is unavailable (e.g., Windows/WSL).
       if (options.manualLoginDefault) {
+        const account = await resolveRemoteManualLoginAccount(payload.browserConfig);
         payload.browserConfig.manualLogin = true;
-        payload.browserConfig.manualLoginProfileDir = options.manualLoginProfileDir;
+        payload.browserConfig.manualLoginProfileDir = account?.profileDir ?? options.manualLoginProfileDir;
+        payload.browserConfig.manualLoginChromeProfile = account?.chromeProfile ?? undefined;
         payload.browserConfig.keepBrowser = true;
         if (verbose) {
           logger(

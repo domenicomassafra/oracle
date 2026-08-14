@@ -672,6 +672,15 @@ export async function runConsultTool(
   }
 
   let browserConfig: BrowserSessionConfig | undefined;
+  let providerReceipt:
+    | {
+        provider: string;
+        adapter: string;
+        accountRole: string;
+        profileKey: string;
+        capability: "text" | "image";
+      }
+    | undefined;
   if (resolvedEngine === "browser") {
     browserConfig = buildConsultBrowserConfig({
       userConfig,
@@ -685,6 +694,17 @@ export async function runConsultTool(
       browserArchive,
       browserKeepBrowser,
     });
+    const {
+      resolveBrowserAccount,
+      providerReceiptForAccount,
+    } = await import("../../accounts.js");
+    const capability = generateImage || outputPath ? "image" : "text";
+    const account = resolveBrowserAccount({
+      config: userConfig,
+      model: runOptions.model,
+      capability,
+    });
+    providerReceipt = providerReceiptForAccount({ model: runOptions.model, account, capability });
   }
 
   if (dryRun) {
@@ -824,6 +844,7 @@ export async function runConsultTool(
         models: modelsSummary,
         artifacts,
         images,
+        ...(providerReceipt ? { providerReceipt } : {}),
       },
     };
   } catch (error) {

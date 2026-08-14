@@ -31,6 +31,18 @@ import { getOracleHomeDir } from "./oracleHome.js";
 export type SessionMode = "api" | "browser";
 
 export interface BrowserSessionConfig {
+  /** Logical browser account selected by the caller; the remote service resolves it locally. */
+  accountId?: string | null;
+  /** Capability checked by the remote service when resolving accountId. */
+  accountCapability?: "text" | "image";
+  /** Redacted provider receipt (provider, real adapter, account role, profile key, capability). */
+  providerReceipt?: {
+    provider: string;
+    adapter: string;
+    accountRole: string;
+    profileKey: string;
+    capability: "text" | "image";
+  };
   chromeProfile?: string | null;
   chromePath?: string | null;
   chromeCookiePath?: string | null;
