@@ -11,6 +11,7 @@ import {
   updateSessionMetadata,
   createSessionLogWriter,
   readSessionLog,
+  readSessionLogTail,
   readModelLog,
   readSessionRequest,
   listSessionsMetadata,
@@ -39,6 +40,7 @@ export interface SessionStore {
     updates: Partial<SessionModelRun>,
   ): Promise<SessionModelRun>;
   readLog(sessionId: string): Promise<string>;
+  readLogTail(sessionId: string, maxBytes: number): Promise<string>;
   readModelLog(sessionId: string, model: string): Promise<string>;
   readRequest(sessionId: string): Promise<StoredRunOptions | null>;
   listSessions(): Promise<SessionMetadata[]>;
@@ -92,6 +94,10 @@ class FileSessionStore implements SessionStore {
 
   readLog(sessionId: string): Promise<string> {
     return readSessionLog(sessionId);
+  }
+
+  readLogTail(sessionId: string, maxBytes: number): Promise<string> {
+    return readSessionLogTail(sessionId, maxBytes);
   }
 
   readModelLog(sessionId: string, model: string): Promise<string> {

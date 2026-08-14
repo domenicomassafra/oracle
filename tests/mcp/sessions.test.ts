@@ -10,7 +10,7 @@ const filterSessions = vi.fn(
   }),
 );
 const readSession = vi.fn(async (_id: string) => null as SessionMetadata | null);
-const readLog = vi.fn(async (_id: string) => "");
+const readLogTail = vi.fn(async (_id: string, _maxBytes: number) => "");
 const readRequest = vi.fn(async (_id: string) => null as StoredRunOptions | null);
 
 vi.mock("../../src/sessionStore.js", async () => {
@@ -24,7 +24,7 @@ vi.mock("../../src/sessionStore.js", async () => {
       listSessions,
       filterSessions,
       readSession,
-      readLog,
+      readLogTail,
       readRequest,
     },
   };
@@ -39,7 +39,7 @@ describe("sessions MCP tool", () => {
     listSessions.mockReset();
     filterSessions.mockReset();
     readSession.mockReset();
-    readLog.mockReset();
+    readLogTail.mockReset();
     readRequest.mockReset();
     handler = null;
     registerSessionsTool({
@@ -114,7 +114,7 @@ describe("sessions MCP tool", () => {
       options: { prompt: "p", file: [], model: "gpt-5.1" },
     };
     readSession.mockResolvedValue(meta);
-    readLog.mockResolvedValue("hello log");
+    readLogTail.mockResolvedValue("hello log");
     readRequest.mockResolvedValue({ prompt: "hi" } as StoredRunOptions);
 
     const result = (await handler?.({ id: "detail", detail: true })) as {
@@ -124,7 +124,7 @@ describe("sessions MCP tool", () => {
     };
 
     expect(readSession).toHaveBeenCalledWith("detail");
-    expect(readLog).toHaveBeenCalledWith("detail");
+    expect(readLogTail).toHaveBeenCalledWith("detail", 64 * 1024);
     expect(readRequest).toHaveBeenCalledWith("detail");
     expect(result.structuredContent.session.metadata.id).toBe("detail");
     expect(result.structuredContent.session.log).toContain("hello log");

@@ -948,6 +948,54 @@ export async function readSessionLog(sessionId: string): Promise<string> {
   return sections.join("\n\n");
 }
 
+async function readTextFileTail(filePath: string, maxBytes: number): Promise<string> {
+  if (maxBytes <= 0) return "";
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(filePath, "r");
+    const { size } = await handle.stat();
+    const length = Math.min(size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, Math.max(0, size - length));
+    return buffer.toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    await handle?.close();
+  }
+}
+
+/**
+ * Reads at most maxBytes from a session's persisted logs. MCP callers only
+ * need recent progress; loading an unbounded browser transcript into V8 can
+ * exhaust the host before the caller receives the result.
+ */
+export async function readSessionLogTail(sessionId: string, maxBytes: number): Promise<string> {
+  const runs = await listModelRunFiles(sessionId);
+  if (runs.length === 0) {
+    return readTextFileTail(logPath(sessionId), maxBytes);
+  }
+  const ordered = runs
+    .slice()
+    .sort((a, b) =>
+      a.startedAt && b.startedAt
+        ? a.startedAt.localeCompare(b.startedAt)
+        : a.model.localeCompare(b.model),
+    );
+  let combined = "";
+  for (const run of ordered) {
+    const logFile = run.log?.path
+      ? path.isAbsolute(run.log.path)
+        ? run.log.path
+        : path.join(sessionDir(sessionId), run.log.path)
+      : modelLogPath(sessionId, run.model);
+    const body = await readTextFileTail(logFile, maxBytes);
+    if (!body) continue;
+    combined = `${combined}${combined ? "\n\n" : ""}=== ${run.model} ===\n${body}`.slice(-maxBytes);
+  }
+  return combined;
+}
+
 export async function readModelLog(sessionId: string, model: string): Promise<string> {
   try {
     return await fs.readFile(modelLogPath(sessionId, model), "utf8");

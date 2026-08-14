@@ -16,11 +16,7 @@ import type { BrowserSessionRunnerDeps } from "../../browser/sessionRunner.js";
 
 async function readSessionLogTail(sessionId: string, maxBytes: number): Promise<string | null> {
   try {
-    const log = await sessionStore.readLog(sessionId);
-    if (log.length <= maxBytes) {
-      return log;
-    }
-    return log.slice(-maxBytes);
+    return await sessionStore.readLogTail(sessionId, maxBytes);
   } catch {
     return null;
   }
@@ -650,15 +646,25 @@ export async function runConsultTool(
     };
   }
   const cwd = process.cwd();
-  const sendLog = (text: string, level: "info" | "debug" = "info") =>
-    server
+  const maxLogNotificationBytes = 8 * 1024;
+  let sentLogNotifications = 0;
+  const maxLogNotifications = 128;
+  const sendLog = (text: string, level: "info" | "debug" = "info") => {
+    if (sentLogNotifications >= maxLogNotifications) return;
+    const bounded =
+      Buffer.byteLength(text, "utf8") <= maxLogNotificationBytes
+        ? text
+        : `${Buffer.from(text).subarray(0, maxLogNotificationBytes).toString("utf8")}\n[Oracle MCP log truncated]`;
+    sentLogNotifications += 1;
+    void server
       .sendLoggingMessage(
         LoggingMessageNotificationParamsSchema.parse({
           level,
-          data: { text, bytes: Buffer.byteLength(text, "utf8") },
+          data: { text: bounded, bytes: Buffer.byteLength(bounded, "utf8") },
         }),
       )
       .catch(() => {});
+  };
 
   const resolvedRemote = resolveRemoteServiceConfig({ userConfig, env: process.env });
   const imageOutputPath = runOptions.generateImage ?? runOptions.outputPath;
@@ -694,10 +700,7 @@ export async function runConsultTool(
       browserArchive,
       browserKeepBrowser,
     });
-    const {
-      resolveBrowserAccount,
-      providerReceiptForAccount,
-    } = await import("../../accounts.js");
+    const { resolveBrowserAccount, providerReceiptForAccount } = await import("../../accounts.js");
     const capability = generateImage || outputPath ? "image" : "text";
     const account = resolveBrowserAccount({
       config: userConfig,
@@ -789,7 +792,7 @@ export async function runConsultTool(
   );
 
   const logWriter = sessionStore.createLogWriter(sessionMeta.id);
-  // Stream logs to both the session log and MCP logging notifications, but avoid buffering in memory
+  // Persist all output, but only publish bounded progress notifications to MCP.
   const log = (line?: string): void => {
     logWriter.logLine(line);
     if (line !== undefined) {
@@ -798,7 +801,6 @@ export async function runConsultTool(
   };
   const write = (chunk: string): boolean => {
     logWriter.writeChunk(chunk);
-    sendLog(chunk, "debug");
     return true;
   };
 
