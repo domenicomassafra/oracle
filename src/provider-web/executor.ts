@@ -150,7 +150,9 @@ async function submitClaude(page: Page, prompt: string): Promise<string> {
     editor.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
     );
-    return editor.textContent?.trim().length === value.length;
+    // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
+    // length equality is unreliable for long prompts; any real content is enough.
+    return (editor.textContent?.trim().length ?? 0) > 0;
   }, prompt);
   if (!typed) throw new Error("Claude prompt composer is not ready.");
   await page.keyboard.press("Enter");
@@ -192,7 +194,9 @@ async function submitGrok(page: Page, prompt: string): Promise<string> {
     editor.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
     );
-    return editor.textContent?.trim().length === value.length;
+    // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
+    // length equality is unreliable for long prompts; any real content is enough.
+    return (editor.textContent?.trim().length ?? 0) > 0;
   }, prompt);
   if (!typed) throw new Error("Grok prompt composer is not ready.");
   await new Promise((resolve) => setTimeout(resolve, 300));
