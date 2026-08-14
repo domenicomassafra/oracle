@@ -3,6 +3,8 @@ import { z } from "zod";
 import { sessionStore } from "../../sessionStore.js";
 import { sessionsInputSchema } from "../types.js";
 
+const MAX_MCP_SESSION_LOG_BYTES = 64 * 1024;
+
 const sessionsInputShape = {
   id: z
     .string()
@@ -24,7 +26,9 @@ const sessionsInputShape = {
   detail: z
     .boolean()
     .optional()
-    .describe("When id is set, include session metadata + stored request + full log text."),
+    .describe(
+      "When id is set, include session metadata + stored request + the latest 64 KiB of log text.",
+    ),
 } satisfies z.ZodRawShape;
 
 const sessionsOutputShape = {
@@ -99,7 +103,7 @@ export function registerSessionsTool(server: McpServer): void {
         if (!metadata) {
           throw new Error(`Session "${id}" not found.`);
         }
-        const log = await sessionStore.readLog(id);
+        const log = await sessionStore.readLogTail(id, MAX_MCP_SESSION_LOG_BYTES);
         const request = (await sessionStore.readRequest(id)) ?? undefined;
         return {
           content: textContent(log),

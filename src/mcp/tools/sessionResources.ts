@@ -3,6 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "node:fs/promises";
 import { sessionStore } from "../../sessionStore.js";
 
+const MAX_MCP_SESSION_LOG_BYTES = 64 * 1024;
+
 // URIs:
 // - oracle-session://<id>/metadata
 // - oracle-session://<id>/log
@@ -43,7 +45,7 @@ export function registerSessionResources(server: McpServer): void {
           };
         }
         case "log": {
-          const log = await sessionStore.readLog(id);
+          const log = await sessionStore.readLogTail(id, MAX_MCP_SESSION_LOG_BYTES);
           return {
             contents: [
               {

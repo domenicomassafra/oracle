@@ -265,6 +265,20 @@ describe("session lifecycle", () => {
     expect(await sessionModule.readSessionLog("missing")).toBe("");
   });
 
+  test("readSessionLogTail bounds memory to the requested tail", async () => {
+    const meta = await sessionModule.initializeSession(
+      { prompt: "Tail only", model: "gpt-5.2-pro" },
+      "/tmp/cwd",
+    );
+    const logPath = path.join(sessionModule.getSessionsDir(), meta.id, "models", "gpt-5.2-pro.log");
+    await writeFile(logPath, `${"x".repeat(16 * 1024)}THE-END`, "utf8");
+
+    const tail = await sessionModule.readSessionLogTail(meta.id, 1024);
+
+    expect(Buffer.byteLength(tail, "utf8")).toBeLessThanOrEqual(1024);
+    expect(tail).toContain("THE-END");
+  });
+
   test("initializeSession appends numeric suffix when slug already exists", async () => {
     const first = await sessionModule.initializeSession(
       { prompt: "Duplicate slug please", model: "gpt-5.2-pro", slug: "alpha beta gamma" },
