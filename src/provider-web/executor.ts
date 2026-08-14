@@ -60,21 +60,31 @@ async function clickButtonByText(page: Page, text: string): Promise<boolean> {
 }
 
 async function closeGrokOverlays(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const exactButton = (text: string) =>
-      Array.from(document.querySelectorAll("button")).find(
-        (candidate) => candidate.textContent?.trim() === text,
+  // Cookie/consent dialogs hydrate asynchronously; retry dismissal so a late
+  // banner cannot sit over the composer when typing starts.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const clicked = await page.evaluate(() => {
+      const exactButton = (text: string) =>
+        Array.from(document.querySelectorAll("button")).find(
+          (candidate) => candidate.textContent?.trim() === text,
+        );
+      const rejectX =
+        exactButton("Rifiuta") ??
+        exactButton("Rifiuta tutto") ??
+        exactButton("Reject") ??
+        exactButton("Reject all");
+      if (rejectX instanceof HTMLElement) rejectX.click();
+      const privacyClose = Array.from(document.querySelectorAll("button")).find((candidate) =>
+        /close privacy preference center|chiudi il centro preferenze/i.test(
+          candidate.getAttribute("aria-label") ?? "",
+        ),
       );
-    const rejectX = exactButton("Rifiuta") ?? exactButton("Reject");
-    if (rejectX instanceof HTMLElement) rejectX.click();
-    const privacyClose = Array.from(document.querySelectorAll("button")).find((candidate) =>
-      /close privacy preference center|chiudi il centro preferenze/i.test(
-        candidate.getAttribute("aria-label") ?? "",
-      ),
-    );
-    if (privacyClose instanceof HTMLElement) privacyClose.click();
-  });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+      if (privacyClose instanceof HTMLElement) privacyClose.click();
+      return Boolean(rejectX) || Boolean(privacyClose);
+    });
+    if (!clicked) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 async function selectClaudeModel(page: Page, label: string): Promise<string> {
@@ -110,7 +120,23 @@ async function selectClaudeModel(page: Page, label: string): Promise<string> {
   return active.replace(/^(model|modello):\s*/i, "");
 }
 
+async function waitForComposer(page: Page, labelPattern: RegExp, timeout = 30_000): Promise<void> {
+  const source = labelPattern.source;
+  const flags = labelPattern.flags;
+  await page.waitForFunction(
+    (pattern) => {
+      const [needle, needleFlags] = pattern as unknown as [string, string];
+      return Array.from(document.querySelectorAll('[contenteditable="true"]')).some((candidate) =>
+        new RegExp(needle, needleFlags).test(candidate.getAttribute("aria-label") ?? ""),
+      );
+    },
+    { timeout },
+    [source, flags],
+  );
+}
+
 async function submitClaude(page: Page, prompt: string): Promise<string> {
+  await waitForComposer(page, /prompt.*claude|claude.*prompt/i);
   const initialCount = await page.$$eval(".font-claude-response", (nodes) => nodes.length);
   const typed = await page.evaluate((value) => {
     const editor = Array.from(document.querySelectorAll('[contenteditable="true"]')).find(
@@ -147,6 +173,10 @@ async function submitClaude(page: Page, prompt: string): Promise<string> {
 
 async function submitGrok(page: Page, prompt: string): Promise<string> {
   await closeGrokOverlays(page);
+  // A fresh tab takes seconds to hydrate the SPA composer; never race it with a fixed sleep.
+  await waitForComposer(page, /ask grok/i);
+  // Cookie dialogs hydrate asynchronously after the composer; dismiss them again before typing.
+  await closeGrokOverlays(page);
   const initialCount = await page.$$eval(
     '[data-testid="assistant-message"]',
     (nodes) => nodes.length,
@@ -165,10 +195,12 @@ async function submitGrok(page: Page, prompt: string): Promise<string> {
     return editor.textContent?.trim().length === value.length;
   }, prompt);
   if (!typed) throw new Error("Grok prompt composer is not ready.");
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await new Promise((resolve) => setTimeout(resolve, 300));
   const sent = await page.evaluate(() => {
-    const button = Array.from(document.querySelectorAll("button")).find((candidate) =>
-      /^(send|invia)$/i.test(candidate.getAttribute("aria-label") ?? ""),
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (candidate) =>
+        /^(send|invia)$/i.test(candidate.getAttribute("aria-label") ?? "") ||
+        candidate.getAttribute("data-testid") === "chat-submit",
     );
     if (!(button instanceof HTMLElement)) return false;
     button.click();
@@ -211,7 +243,6 @@ export function createProviderWebExecutor(): (
       browser = await puppeteer.connect({ browserURL: browserUrl });
       page = await browser.newPage();
       await page.goto(target.url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      await new Promise((resolve) => setTimeout(resolve, 800));
       let selectedLabel = target.label;
       let answerText: string;
       if (target.provider === "claude") {

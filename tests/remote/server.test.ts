@@ -345,6 +345,77 @@ describe("remote browser service", () => {
   );
 
   test.skipIf(!CAN_LISTEN_LOCALHOST)(
+    "does not let a remote caller choose a manual-login profile path for a named account",
+    async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "oracle-remote-account-test-"));
+      setOracleHomeDirOverrideForTest(tmpDir);
+      await writeFile(
+        path.join(tmpDir, "config.json"),
+        JSON.stringify({
+          accountPool: {
+            accounts: {
+              primary: {
+                providers: ["chatgpt"],
+                profileDir: "/server-owned/primary",
+                chromeProfile: "Profile 2",
+                capabilities: ["text", "image"],
+              },
+            },
+          },
+        }),
+      );
+      const server = await createRemoteServer(
+        {
+          host: "127.0.0.1",
+          port: 0,
+          token: "secret",
+          logger: () => {},
+          manualLoginDefault: true,
+          manualLoginProfileDir: "/server-owned/fallback",
+        },
+        {
+          runBrowser: async (options) => {
+            expect(options.config).toMatchObject({
+              accountId: "primary",
+              accountCapability: "image",
+              manualLogin: true,
+              manualLoginProfileDir: "/server-owned/primary",
+              manualLoginChromeProfile: "Profile 2",
+              keepBrowser: true,
+            });
+            return {
+              answerText: "done",
+              answerMarkdown: "done",
+              tookMs: 1,
+              answerTokens: 1,
+              answerChars: 4,
+            };
+          },
+        },
+      );
+
+      try {
+        const result = await createRemoteBrowserExecutor({
+          host: `127.0.0.1:${server.port}`,
+          token: "secret",
+        })({
+          prompt: "remote named account",
+          config: {
+            accountId: "primary",
+            accountCapability: "image",
+            manualLoginProfileDir: "/client-controlled/profile",
+          },
+        });
+        expect(result.answerText).toBe("done");
+      } finally {
+        await server.close();
+        await rm(tmpDir, { recursive: true, force: true });
+        setOracleHomeDirOverrideForTest(null);
+      }
+    },
+  );
+
+  test.skipIf(!CAN_LISTEN_LOCALHOST)(
     "transfers saved browser file artifacts to the client session directory",
     async () => {
       const tmpDir = await mkdtemp(path.join(os.tmpdir(), "oracle-remote-artifact-test-"));

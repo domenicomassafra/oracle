@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { providerForModel, resolveBrowserAccount } from "../src/accounts.js";
+import {
+  accountRoleFor,
+  providerAdapterFor,
+  providerForModel,
+  providerReceiptForAccount,
+  redactProfileKey,
+  resolveBrowserAccount,
+} from "../src/accounts.js";
 import type { UserConfig } from "../src/config.js";
 
 const config: UserConfig = {
@@ -197,5 +204,66 @@ describe("Oracle browser accounts", () => {
     expect(() =>
       resolveBrowserAccount({ config: invalid, model: "gpt-5.6-sol", capability: "text" }),
     ).toThrow(/must be a Chrome profile name/);
+  });
+
+  test("maps every provider to its own real browser adapter", () => {
+    expect(providerAdapterFor("chatgpt")).toBe("chatgpt-browser");
+    expect(providerAdapterFor("gemini")).toBe("gemini-browser");
+    expect(providerAdapterFor("claude")).toBe("claude-browser");
+    expect(providerAdapterFor("grok")).toBe("grok-browser");
+  });
+
+  test("redacted profile keys are stable and never contain account identity", () => {
+    const first = redactProfileKey("/profiles/chatgpt-primary", null);
+    const second = redactProfileKey("/profiles/chatgpt-primary", "Default");
+    expect(first).toBe(second);
+    expect(first).toMatch(/^pk-[0-9a-f]{12}$/);
+    expect(first).not.toContain("chatgpt");
+    expect(first).not.toContain("/profiles");
+    const other = redactProfileKey("/profiles/gemini-primary", null);
+    expect(other).not.toBe(first);
+  });
+
+  test("provider receipt carries provider, adapter, role, redacted key and capability", () => {
+    const account = resolveBrowserAccount({
+      config,
+      model: "gpt-5.6-sol",
+      capability: "image",
+    });
+    expect(account).not.toBeNull();
+    const receipt = providerReceiptForAccount({
+      model: "gpt-5.6-sol",
+      account,
+      capability: "image",
+    });
+    expect(receipt.provider).toBe("chatgpt");
+    expect(receipt.adapter).toBe("chatgpt-browser");
+    expect(receipt.accountRole).toBe("primary");
+    expect(receipt.profileKey).toMatch(/^pk-[0-9a-f]{12}$/);
+    expect(receipt.capability).toBe("image");
+    expect(JSON.stringify(receipt)).not.toContain("/profiles");
+    expect(JSON.stringify(receipt)).not.toContain("primary-chatgpt");
+  });
+
+  test("provider receipt uses the model family when no account is resolved", () => {
+    const receipt = providerReceiptForAccount({
+      model: "grok-4.1",
+      account: null,
+      capability: "text",
+    });
+    expect(receipt.provider).toBe("grok");
+    expect(receipt.adapter).toBe("grok-browser");
+    expect(receipt.accountRole).toBe("none");
+    expect(receipt.profileKey).toBe("none");
+  });
+
+  test("account role defaults to primary and never leaks the profile name", () => {
+    expect(accountRoleFor(null)).toBe("primary");
+    const account = resolveBrowserAccount({
+      config,
+      model: "gemini-3.6-flash",
+      capability: "text",
+    });
+    expect(accountRoleFor(account)).toBe("primary");
   });
 });

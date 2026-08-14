@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { UserConfig } from "./config.js";
 
 export type AccountCapability = "text" | "image";
@@ -12,6 +13,8 @@ export interface BrowserAccountConfig {
   chromeProfile?: string;
   profileDir: string;
   capabilities: AccountCapability[];
+  /** Non-identifying role class used in receipts ("primary", "secondary", ...). */
+  role?: string;
   enabled?: boolean;
 }
 
@@ -28,6 +31,7 @@ export interface ResolvedBrowserAccount {
   chromeProfile: string | null;
   profileDir: string;
   capabilities: AccountCapability[];
+  role: string;
 }
 
 export function providerForModel(model: string): BrowserAccountConfig["providers"][number] {
@@ -129,5 +133,67 @@ export function resolveBrowserAccount(input: {
     chromeProfile: resolveChromeProfile(account.chromeProfile),
     profileDir: resolveProfileDir(account.profileDir),
     capabilities: [...account.capabilities],
+    role: account.role?.trim() || "primary",
+  };
+}
+
+/** Real browser adapter name for a resolved provider. Never reused across providers. */
+export function providerAdapterFor(provider: BrowserAccountConfig["providers"][number]): string {
+  switch (provider) {
+    case "chatgpt":
+      return "chatgpt-browser";
+    case "gemini":
+      return "gemini-browser";
+    case "claude":
+      return "claude-browser";
+    case "grok":
+      return "grok-browser";
+  }
+}
+
+/**
+ * Redacted, stable profile key for receipts: a short SHA-256 of the resolved
+ * profile directory plus the Chrome profile name. Never includes the account id.
+ */
+export function redactProfileKey(profileDir: string, chromeProfile: string | null): string {
+  const digest = createHash("sha256")
+    .update(`${path.resolve(profileDir)}\u0000${chromeProfile ?? "Default"}`)
+    .digest("hex");
+  return `pk-${digest.slice(0, 12)}`;
+}
+
+/**
+ * Non-identifying account role label used in receipts. The account id (often an
+ * email) and the owner-facing profile name are intentionally not part of the
+ * returned value; only the configured role class ("primary", "secondary") is.
+ */
+export function accountRoleFor(account: ResolvedBrowserAccount | null): string {
+  return account?.role ?? "primary";
+}
+
+/**
+ * Redacted provider receipt for a single consult: provider, real adapter,
+ * owner-facing account role and redacted profile key, plus capability.
+ */
+export function providerReceiptForAccount(input: {
+  model: string;
+  account: ResolvedBrowserAccount | null;
+  capability: AccountCapability;
+}): {
+  provider: string;
+  adapter: string;
+  accountRole: string;
+  profileKey: string;
+  capability: AccountCapability;
+} {
+  const provider = input.account?.provider ?? providerForModel(input.model);
+  return {
+    provider,
+    adapter: providerAdapterFor(provider),
+    accountRole: input.account ? accountRoleFor(input.account) : "none",
+    profileKey: input.account
+      ? redactProfileKey(input.account.profileDir, input.account.chromeProfile)
+      : "none",
+    capability: input.capability,
   };
 }

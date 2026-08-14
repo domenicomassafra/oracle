@@ -2151,8 +2151,16 @@ async function runRootCommand(options: CliOptions): Promise<void> {
     }
   }
   const activeModel = resolvedOptions.model;
+  let selectedBrowserAccountId: string | undefined;
+  let selectedBrowserAccountCapability: "text" | "image" | undefined;
+  let selectedProviderReceipt:
+    | ReturnType<typeof import("../src/accounts.js").providerReceiptForAccount>
+    | undefined;
   if (engine === "browser") {
-    const { resolveBrowserAccount } = await import("../src/accounts.js");
+    const {
+      resolveBrowserAccount,
+      providerReceiptForAccount,
+    } = await import("../src/accounts.js");
     const capability = options.generateImage || options.editImage ? "image" : "text";
     const account = resolveBrowserAccount({
       config: userConfig,
@@ -2168,6 +2176,13 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       options.browserManualLogin = true;
       options.browserManualLoginProfileDir = account.profileDir;
       options.browserManualLoginChromeProfile = account.chromeProfile;
+      selectedBrowserAccountId = account.id;
+      selectedBrowserAccountCapability = capability;
+      selectedProviderReceipt = providerReceiptForAccount({
+        model: activeModel,
+        account,
+        capability,
+      });
       console.log(
         chalk.dim(
           `Using named ${account.provider} browser profile [redacted] with ${capability} capability.`,
@@ -2203,9 +2218,19 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       browserRequestedModel: cliModelArg,
       browserModelLabel: resolveBrowserModelLabel(cliModelArg, activeModel),
     });
-    return resolvedOptions.browserResumeConversationUrl
-      ? { ...config, resumeConversationUrl: resolvedOptions.browserResumeConversationUrl }
-      : config;
+    return {
+      ...config,
+      ...(resolvedOptions.browserResumeConversationUrl
+        ? { resumeConversationUrl: resolvedOptions.browserResumeConversationUrl }
+        : {}),
+      ...(selectedBrowserAccountId
+        ? {
+            accountId: selectedBrowserAccountId,
+            accountCapability: selectedBrowserAccountCapability,
+          }
+        : {}),
+      ...(selectedProviderReceipt ? { providerReceipt: selectedProviderReceipt } : {}),
+    };
   })();
 
   if (previewMode) {
