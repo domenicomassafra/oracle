@@ -194,6 +194,14 @@ const consultImageSummaryShape = consultArtifactSummaryShape.extend({
   fileId: z.string().optional(),
 });
 
+const consultProviderReceiptShape = z.object({
+  provider: z.string(),
+  adapter: z.string(),
+  accountRole: z.string(),
+  profileKey: z.string(),
+  capability: z.enum(["text", "image"]),
+});
+
 const consultDryRunResolvedShape = z.object({
   resolvedEngine: z.enum(["api", "browser"]),
   model: z.string(),
@@ -228,6 +236,7 @@ export const consultOutputShape = {
   models: z.array(consultModelSummaryShape).optional(),
   artifacts: z.array(consultArtifactSummaryShape).optional(),
   images: z.array(consultImageSummaryShape).optional(),
+  providerReceipt: consultProviderReceiptShape.optional(),
 } satisfies z.ZodRawShape;
 
 export type ConsultModelSummary = z.infer<typeof consultModelSummaryShape>;

@@ -174,6 +174,37 @@ describe("summarizeModelRunsForConsult", () => {
     expect(() => z.toJSONSchema(z.object(inputSchema!))).not.toThrow();
   });
 
+  test("declares the provider receipt returned by successful browser consults", () => {
+    let outputSchema: z.ZodRawShape | undefined;
+    registerConsultTool({
+      registerTool: (_name: string, def: unknown) => {
+        outputSchema = (def as { outputSchema: z.ZodRawShape }).outputSchema;
+      },
+      server: {
+        sendLoggingMessage: async () => undefined,
+      },
+    } as unknown as Parameters<typeof registerConsultTool>[0]);
+
+    const schema = z.toJSONSchema(z.object(outputSchema!)) as {
+      properties?: Record<string, unknown>;
+    };
+    expect(schema.properties).toHaveProperty("providerReceipt");
+    expect(
+      z.object(outputSchema!).parse({
+        sessionId: "session-1",
+        status: "completed",
+        output: "review complete",
+        providerReceipt: {
+          provider: "chatgpt",
+          adapter: "chatgpt-browser",
+          accountRole: "primary",
+          profileKey: "profile-…-hash",
+          capability: "text",
+        },
+      }),
+    ).toMatchObject({ providerReceipt: { adapter: "chatgpt-browser", capability: "text" } });
+  });
+
   test("maps per-model metadata into consult summaries", () => {
     const runs: SessionModelRun[] = [
       {
