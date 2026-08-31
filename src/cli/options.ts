@@ -222,6 +222,9 @@ function isGeminiDeepThinkAlias(normalized: string): boolean {
 
 export function resolveApiModel(modelValue: string): ModelName {
   const normalized = normalizeModelOption(modelValue).toLowerCase();
+  if (normalized.includes("/")) {
+    return normalized as ModelName;
+  }
   if (normalized.includes("claude") && normalized.includes("sonnet") && normalized.includes("5")) {
     return "claude-sonnet-5";
   }
@@ -293,11 +296,7 @@ export function resolveApiModel(modelValue: string): ModelName {
     );
   }
   if (normalized.includes("gemini")) {
-    if (
-      normalized.includes("3.5") &&
-      normalized.includes("flash") &&
-      normalized.includes("lite")
-    ) {
+    if (normalized.includes("3.5") && normalized.includes("flash") && normalized.includes("lite")) {
       return "gemini-3.5-flash-lite";
     }
     if (normalized.includes("3.6") && normalized.includes("flash")) {
@@ -338,6 +337,9 @@ export function isGpt56BrowserLabel(modelValue: string): boolean {
 
 export function inferModelFromLabel(modelValue: string): ModelName {
   const normalized = normalizeModelOption(modelValue).toLowerCase();
+  if (normalized.includes("/")) {
+    return normalized as ModelName;
+  }
   if (normalized.includes("claude") && normalized.includes("sonnet") && normalized.includes("5")) {
     return "claude-sonnet-5";
   }
@@ -369,11 +371,7 @@ export function inferModelFromLabel(modelValue: string): ModelName {
     return "gemini-3-pro-deep-think" as ModelName;
   }
   if (normalized.includes("gemini")) {
-    if (
-      normalized.includes("3.5") &&
-      normalized.includes("flash") &&
-      normalized.includes("lite")
-    ) {
+    if (normalized.includes("3.5") && normalized.includes("flash") && normalized.includes("lite")) {
       return "gemini-3.5-flash-lite";
     }
     if (normalized.includes("3.6") && normalized.includes("flash")) {
