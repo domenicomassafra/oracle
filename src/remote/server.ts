@@ -130,8 +130,9 @@ export async function createRemoteServer(
   const color = process.stdout.isTTY
     ? (formatter: (msg: string) => string, msg: string) => formatter(msg)
     : (_formatter: (msg: string) => string, msg: string) => msg;
-  // Single-flight guard: remote Chrome can only host one run at a time, so we serialize requests.
-  let busy = false;
+  // Remote Chrome is singleton. Preserve admission order rather than rejecting
+  // a valid concurrent caller; every admitted run releases the next in finally.
+  let admissionTail: Promise<void> = Promise.resolve();
   const artifactRegistry = new Map<string, RegisteredRemoteArtifact>();
 
   if (!process.listenerCount("unhandledRejection")) {
@@ -204,19 +205,6 @@ export async function createRemoteServer(
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    if (busy) {
-      if (verbose) {
-        logger(
-          `[serve] Busy: rejecting new run from ${formatSocket(req)} while another run is active`,
-        );
-      }
-      res.writeHead(409, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "busy" }));
-      return;
-    }
-    busy = true;
-    const runStartedAt = Date.now();
-
     let payload: RemoteRunPayload | null = null;
     try {
       const body = await readRequestBody(req);
@@ -225,12 +213,18 @@ export async function createRemoteServer(
         payload.browserConfig.url = normalizeChatgptUrl(payload.browserConfig.url, CHATGPT_URL);
       }
     } catch {
-      busy = false;
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "invalid_request" }));
       return;
     }
 
+    let releaseAdmission!: () => void;
+    const previousAdmission = admissionTail;
+    admissionTail = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const runStartedAt = Date.now();
+    await previousAdmission;
     res.writeHead(200, { "Content-Type": "application/x-ndjson" });
 
     const runId = randomUUID();
@@ -371,7 +365,7 @@ export async function createRemoteServer(
       sendEvent({ type: "error", message });
       logger(`[serve] Run ${runId} failed after ${Date.now() - runStartedAt}ms: ${message}`);
     } finally {
-      busy = false;
+      releaseAdmission();
       res.end();
       try {
         await rm(runDir, { recursive: true, force: true });

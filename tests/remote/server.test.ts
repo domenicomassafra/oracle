@@ -286,6 +286,57 @@ describe("remote browser service", () => {
   );
 
   test.skipIf(!CAN_LISTEN_LOCALHOST)(
+    "admits concurrent remote browser runs in FIFO order",
+    async () => {
+      let starts = 0;
+      let firstStarted!: () => void;
+      const firstStartedPromise = new Promise<void>((resolve) => {
+        firstStarted = resolve;
+      });
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const server = await createRemoteServer(
+        { host: "127.0.0.1", port: 0, token: "secret", logger: () => {} },
+        {
+          runBrowser: async () => {
+            starts += 1;
+            if (starts === 1) {
+              firstStarted();
+              await firstGate;
+            }
+            return {
+              answerText: `run-${starts}`,
+              answerMarkdown: `run-${starts}`,
+              tookMs: 1,
+              answerTokens: 1,
+              answerChars: 5,
+            };
+          },
+        },
+      );
+      try {
+        const execute = createRemoteBrowserExecutor({
+          host: `127.0.0.1:${server.port}`,
+          token: "secret",
+        });
+        const first = execute({ prompt: "first", config: {} });
+        await firstStartedPromise;
+        const second = execute({ prompt: "second", config: {} });
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        expect(starts).toBe(1);
+        releaseFirst();
+        await expect(first).resolves.toMatchObject({ answerText: "run-1" });
+        await expect(second).resolves.toMatchObject({ answerText: "run-2" });
+        expect(starts).toBe(2);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  test.skipIf(!CAN_LISTEN_LOCALHOST)(
     "keeps manual-login Chrome but requests completed run-tab cleanup",
     async () => {
       const manualLoginProfileDir = "/tmp/oracle-manual-login-profile-test";
