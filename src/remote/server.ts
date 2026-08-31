@@ -309,7 +309,8 @@ export async function createRemoteServer(
       if (options.manualLoginDefault) {
         const account = await resolveRemoteManualLoginAccount(payload.browserConfig);
         payload.browserConfig.manualLogin = true;
-        payload.browserConfig.manualLoginProfileDir = account?.profileDir ?? options.manualLoginProfileDir;
+        payload.browserConfig.manualLoginProfileDir =
+          account?.profileDir ?? options.manualLoginProfileDir;
         payload.browserConfig.manualLoginChromeProfile = account?.chromeProfile ?? undefined;
         payload.browserConfig.keepBrowser = true;
         if (verbose) {
@@ -776,6 +777,8 @@ const CLIENT_BROWSER_CONFIG_FIELDS = [
   "chatgptUrl",
   "url",
   "desiredModel",
+  "accountId",
+  "accountCapability",
   "modelStrategy",
   "thinkingTime",
   "researchMode",

@@ -386,7 +386,6 @@ describe("summarizeModelRunsForConsult", () => {
     });
   });
 
-  test("lets explicit consult inputs override config defaults", () => {
   test("retains provider model IDs while explicit consult inputs override config defaults", () => {
     const config = buildConsultBrowserConfig({
       userConfig: {
