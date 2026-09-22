@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -192,6 +192,52 @@ describe("profileState", () => {
     expect(profileState.isChromeCommandForUserDataDirForTest("node worker.js", dir)).toBe(false);
   });
 
+  test.runIf(process.platform === "win32")(
+    "matches recorded Windows Chrome commands case-insensitively",
+    () => {
+      expect(
+        profileState.isChromeCommandForUserDataDirForTest(
+          '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir=C:\\USERS\\XING_\\.ORACLE\\BROWSER-PROFILE',
+          "c:\\users\\xing_\\.oracle\\browser-profile",
+        ),
+      ).toBe(true);
+      expect(
+        profileState.isChromeCommandForUserDataDirForTest(
+          '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir="C:\\Oracle\\manual-profile-backup"',
+          "C:\\Oracle\\manual-profile",
+        ),
+      ).toBe(false);
+      expect(
+        profileState.isChromeCommandForUserDataDirForTest(
+          '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir "C:\\Oracle\\manual profile"',
+          "c:\\oracle\\manual profile\\",
+        ),
+      ).toBe(true);
+      expect(
+        profileState.isChromeCommandForUserDataDirForTest(
+          'node.exe worker.js --label=chrome --user-data-dir="C:\\Oracle\\manual-profile"',
+          "C:\\Oracle\\manual-profile",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  test("reads the current process start identity", async () => {
+    const startedAt = await profileState.readProcessStartTimeMs(process.pid);
+    expect(startedAt).not.toBeNull();
+    expect(Math.abs((startedAt ?? 0) - (Date.now() - process.uptime() * 1000))).toBeLessThan(2000);
+  });
+
+  test("keeps process identity stable when the wall clock is corrected", async () => {
+    const before = await profileState.readProcessStartTimeMs(process.pid);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    try {
+      expect(await profileState.readProcessStartTimeMs(process.pid)).toBe(before);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("discovers running Chrome DevTools port from process list", () => {
     const dir = "/Users/example/.oracle/browser-profile";
     const processList = `
@@ -206,5 +252,126 @@ describe("profileState", () => {
       pid: 456,
       port: 64305,
     });
+  });
+});
+
+test("matches a quoted complete user-data-dir argument without accepting a sibling profile", async () => {
+  const { isChromeCommandForUserDataDirForTest } =
+    await import("../../src/browser/profileState.js");
+  const profile = path.resolve("profile with spaces");
+  const command = `chrome "--user-data-dir=${profile}" --remote-debugging-port=9222`;
+  expect(isChromeCommandForUserDataDirForTest(command, profile)).toBe(true);
+  expect(isChromeCommandForUserDataDirForTest(command, profile + "-other")).toBe(false);
+});
+
+test("does not identify a later chrome-named argument as the process executable", async () => {
+  const { isChromeCommandForUserDataDirForTest } =
+    await import("../../src/browser/profileState.js");
+  const profile = path.resolve("profile");
+  expect(
+    isChromeCommandForUserDataDirForTest(
+      `/usr/bin/node /tmp/chrome --user-data-dir=${profile}`,
+      profile,
+    ),
+  ).toBe(false);
+});
+
+test("does not erase meaningful whitespace from a quoted profile path", async () => {
+  const { isChromeCommandForUserDataDirForTest } =
+    await import("../../src/browser/profileState.js");
+  const profile = path.resolve("profile");
+  expect(
+    isChromeCommandForUserDataDirForTest(`chrome --user-data-dir="${profile} "`, profile),
+  ).toBe(false);
+});
+
+test("refuses ambiguous duplicate profile arguments", async () => {
+  const { isChromeCommandForUserDataDirForTest } =
+    await import("../../src/browser/profileState.js");
+  const profile = path.resolve("profile");
+  expect(
+    isChromeCommandForUserDataDirForTest(
+      `chrome --user-data-dir="${profile}" --user-data-dir="${profile}-other"`,
+      profile,
+    ),
+  ).toBe(false);
+});
+
+test.each([
+  "google-chrome-beta",
+  "google-chrome-dev",
+  "google-chrome-unstable",
+  "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+  "/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev",
+  "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+])("recognizes the configured Chrome channel executable %s", (executable) => {
+  const profile = path.resolve("shared profile");
+  expect(
+    profileState.isChromeCommandForUserDataDirForTest(
+      `${executable} --user-data-dir="${profile}" --remote-debugging-port=9222`,
+      profile,
+    ),
+  ).toBe(true);
+  expect(
+    profileState.isChromeCommandForUserDataDirForTest(
+      `node ${executable} --user-data-dir="${profile}"`,
+      profile,
+    ),
+  ).toBe(false);
+});
+
+test.each(["--remote-debugging-port=9222", "about:blank"])(
+  "preserves spaces before POSIX argument %s",
+  async (suffix) => {
+    const { isChromeCommandForUserDataDirForTest } =
+      await import("../../src/browser/profileState.js");
+    const profile = path.resolve("Shared Profile");
+    const command = `chrome --user-data-dir=${profile} ${suffix}`;
+    expect(isChromeCommandForUserDataDirForTest(command, profile)).toBe(true);
+    expect(isChromeCommandForUserDataDirForTest(command, path.resolve("Shared"))).toBe(false);
+  },
+);
+
+describe("verifyDevToolsReachable", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  test("brackets an IPv6 host when probing DevTools", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      profileState.verifyDevToolsReachable({ port: 9222, host: "::1" }),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith("http://[::1]:9222/json/version", {
+      signal: expect.any(AbortSignal),
+    });
+    const [versionUrl] = fetchMock.mock.calls[0] as [string];
+    expect(() => new URL(versionUrl)).not.toThrow();
+  });
+
+  test("keeps an IPv4 host unchanged when probing DevTools", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      profileState.verifyDevToolsReachable({ port: 9222, host: "127.0.0.1" }),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:9222/json/version", {
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  test("clears the abort timer when the probe rejects", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      profileState.verifyDevToolsReachable({ port: 9222, attempts: 1 }),
+    ).resolves.toEqual({ ok: false, error: "ECONNREFUSED" });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

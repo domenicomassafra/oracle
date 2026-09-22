@@ -1,9 +1,9 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import type { SessionModelRun } from "../../src/sessionStore.js";
+import { sessionStore, type SessionModelRun } from "../../src/sessionStore.js";
 import { applyConsultPreset } from "../../src/mcp/consultPresets.ts";
 import { consultInputSchema } from "../../src/mcp/types.ts";
 import { setOracleHomeDirOverrideForTest } from "../../src/oracleHome.js";
@@ -14,6 +14,7 @@ import {
   enforceMcpGptModelPolicy,
   formatConsultDryRunResolved,
   registerConsultTool,
+  runConsultTool,
   summarizeArtifactsForConsult,
   summarizeImageArtifactsForConsult,
   summarizeModelRunsForConsult,
@@ -108,6 +109,90 @@ describe("summarizeModelRunsForConsult", () => {
     ).toThrow(/custom browser model labels.*disabled/i);
   });
 
+  test("starts a detached consult and returns a durable session id", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "oracle-home-"));
+    setOracleHomeDirOverrideForTest(home);
+    const previousNoDetach = process.env.ORACLE_NO_DETACH;
+    delete process.env.ORACLE_NO_DETACH;
+    try {
+      const launchDetached = vi.fn(
+        async ({ prepare }: { prepare: (pid: number) => Promise<void> }) => {
+          await prepare(4242);
+          return 4242;
+        },
+      );
+      const result = await runConsultTool(
+        {
+          prompt: "review this plan",
+          files: [],
+          model: "gpt-5.4",
+          engine: "api",
+          waitForCompletion: false,
+        },
+        {
+          log: vi.fn(async () => undefined),
+          launchDetached: launchDetached as never,
+        },
+      );
+      const structured = result.structuredContent as {
+        sessionId?: string;
+        status?: string;
+        detached?: boolean;
+      };
+
+      expect(result.isError).not.toBe(true);
+      expect(structured).toMatchObject({ status: "running", detached: true });
+      expect(structured.sessionId).toBeTruthy();
+      expect(launchDetached).toHaveBeenCalledTimes(1);
+
+      const stored = await sessionStore.readSession(structured.sessionId!);
+      expect(stored).toMatchObject({
+        status: "running",
+        lifecycle: {
+          execution: "background",
+          attached: false,
+          detached: true,
+          workerPid: 4242,
+        },
+        options: { waitPreference: false },
+      });
+    } finally {
+      if (previousNoDetach === undefined) delete process.env.ORACLE_NO_DETACH;
+      else process.env.ORACLE_NO_DETACH = previousNoDetach;
+      setOracleHomeDirOverrideForTest(null);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps detached dry-runs non-mutating when detaching is disabled", async () => {
+    const previousNoDetach = process.env.ORACLE_NO_DETACH;
+    process.env.ORACLE_NO_DETACH = "1";
+    try {
+      const launchDetached = vi.fn();
+      const result = await runConsultTool(
+        {
+          prompt: "preview a long run",
+          files: [],
+          model: "gpt-5.4",
+          engine: "api",
+          waitForCompletion: false,
+          dryRun: true,
+        },
+        {
+          log: vi.fn(async () => undefined),
+          launchDetached: launchDetached as never,
+        },
+      );
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ status: "dry-run", dryRun: true });
+      expect(launchDetached).not.toHaveBeenCalled();
+    } finally {
+      if (previousNoDetach === undefined) delete process.env.ORACLE_NO_DETACH;
+      else process.env.ORACLE_NO_DETACH = previousNoDetach;
+    }
+  });
+
   test("applies the ChatGPT Pro Heavy consult preset as overridable defaults", () => {
     expect(
       applyConsultPreset({
@@ -160,37 +245,31 @@ describe("summarizeModelRunsForConsult", () => {
   });
 
   test("keeps the registered MCP input schema JSON-schema compatible", () => {
-    let inputSchema: z.ZodRawShape | undefined;
+    let inputSchema: z.ZodType | undefined;
     registerConsultTool({
       registerTool: (_name: string, def: unknown) => {
-        inputSchema = (def as { inputSchema: z.ZodRawShape }).inputSchema;
-      },
-      server: {
-        sendLoggingMessage: async () => undefined,
+        inputSchema = (def as { inputSchema: z.ZodType }).inputSchema;
       },
     } as unknown as Parameters<typeof registerConsultTool>[0]);
 
     expect(inputSchema).toBeDefined();
-    expect(() => z.toJSONSchema(z.object(inputSchema!))).not.toThrow();
+    expect(() => z.toJSONSchema(inputSchema!)).not.toThrow();
   });
 
   test("declares the provider receipt returned by successful browser consults", () => {
-    let outputSchema: z.ZodRawShape | undefined;
+    let outputSchema: z.ZodType | undefined;
     registerConsultTool({
       registerTool: (_name: string, def: unknown) => {
-        outputSchema = (def as { outputSchema: z.ZodRawShape }).outputSchema;
-      },
-      server: {
-        sendLoggingMessage: async () => undefined,
+        outputSchema = (def as { outputSchema: z.ZodType }).outputSchema;
       },
     } as unknown as Parameters<typeof registerConsultTool>[0]);
 
-    const schema = z.toJSONSchema(z.object(outputSchema!)) as {
+    const schema = z.toJSONSchema(outputSchema!) as {
       properties?: Record<string, unknown>;
     };
     expect(schema.properties).toHaveProperty("providerReceipt");
     expect(
-      z.object(outputSchema!).parse({
+      outputSchema!.parse({
         sessionId: "session-1",
         status: "completed",
         output: "review complete",
@@ -286,6 +365,51 @@ describe("summarizeModelRunsForConsult", () => {
     expect(summarizedImages?.[0]).not.toHaveProperty("finalUrl");
   });
 
+  test.each(["current", "ignore"] as const)(
+    "preserves Astra browser strategy %s from saved config or input",
+    (modelStrategy) => {
+      for (const explicit of [false, true]) {
+        const config = buildConsultBrowserConfig({
+          userConfig: { browser: { modelStrategy: explicit ? "select" : modelStrategy } },
+          env: {},
+          runModel: "gpt-6-astra",
+          browserModelStrategy: explicit ? modelStrategy : undefined,
+        });
+        expect(config.modelStrategy).toBe(modelStrategy);
+        expect(config.thinkingTime).toBeUndefined();
+      }
+    },
+  );
+
+  test("selects Latest through MCP including explicit strategy overrides", () => {
+    expect(
+      buildConsultBrowserConfig({ userConfig: {}, env: {}, runModel: "gpt-6-astra" }),
+    ).toMatchObject({ desiredModel: "Latest" });
+    expect(
+      buildConsultBrowserConfig({
+        userConfig: { browser: { modelStrategy: "current" } },
+        env: {},
+        runModel: "gpt-6-astra",
+        browserModelStrategy: "select",
+      }),
+    ).toMatchObject({ desiredModel: "Latest", modelStrategy: "select" });
+  });
+
+  test("marks only omitted MCP models as implicit defaults", () => {
+    const base = { userConfig: {}, env: {}, runModel: "gpt-5.5-pro" };
+    expect(buildConsultBrowserConfig(base).modelIsImplicitDefault).toBe(true);
+    expect(
+      buildConsultBrowserConfig({ ...base, inputModel: "gpt-5.5-pro" }).modelIsImplicitDefault,
+    ).toBe(false);
+    expect(
+      buildConsultBrowserConfig({ ...base, userConfig: { model: "gpt-5.5-pro" } })
+        .modelIsImplicitDefault,
+    ).toBe(false);
+    expect(
+      buildConsultBrowserConfig({ ...base, browserModelLabel: "GPT-5.5" }).modelIsImplicitDefault,
+    ).toBe(false);
+  });
+
   test("merges browser defaults from config for consult runs", () => {
     const config = buildConsultBrowserConfig({
       userConfig: {
@@ -363,7 +487,75 @@ describe("summarizeModelRunsForConsult", () => {
     });
   });
 
-  test("retains provider model IDs while explicit consult inputs override config defaults", () => {
+  test("keeps current Pro alias semantics after MCP model normalization", () => {
+    const config = buildConsultBrowserConfig({
+      userConfig: {},
+      env: {},
+      runModel: "gpt-5.6-sol",
+      inputModel: "gpt-5-pro",
+    });
+
+    expect(config).toMatchObject({
+      desiredModel: "GPT-5.6 Sol",
+      thinkingTime: "pro",
+    });
+  });
+
+  test("supports gpt-6-pro through MCP browser consult config", () => {
+    const config = buildConsultBrowserConfig({
+      userConfig: {},
+      env: {},
+      runModel: "gpt-6-pro",
+      inputModel: "gpt-6-pro",
+    });
+
+    expect(config).toMatchObject({
+      desiredModel: "Latest",
+      thinkingTime: "pro",
+    });
+  });
+
+  test("lets configured effort override the current Pro alias default", () => {
+    const config = buildConsultBrowserConfig({
+      userConfig: { browser: { thinkingTime: "extended" } },
+      env: {},
+      runModel: "gpt-5.6-sol",
+      inputModel: "gpt-5-pro",
+    });
+
+    expect(config).toMatchObject({
+      desiredModel: "GPT-5.6 Sol",
+      thinkingTime: "extended",
+    });
+  });
+
+  test("does not force Pro effort when the MCP request keeps ChatGPT's current model", () => {
+    const config = buildConsultBrowserConfig({
+      userConfig: {},
+      env: {},
+      runModel: "gpt-5.6-sol",
+      inputModel: "gpt-5-pro",
+      browserModelStrategy: "current",
+    });
+
+    expect(config.thinkingTime).toBeUndefined();
+  });
+
+  test("defaults an explicit historical Pro target to Pro effort", () => {
+    const config = buildConsultBrowserConfig({
+      userConfig: {},
+      env: {},
+      runModel: "gpt-5.5-pro",
+      inputModel: "gpt-5.5-pro",
+    });
+
+    expect(config).toMatchObject({
+      desiredModel: "GPT-5.5",
+      thinkingTime: "pro",
+    });
+  });
+
+  test("lets explicit consult inputs override config defaults", () => {
     const config = buildConsultBrowserConfig({
       userConfig: {
         browser: {
@@ -463,11 +655,12 @@ describe("summarizeModelRunsForConsult", () => {
     try {
       const handlers: Array<(input: unknown) => Promise<unknown>> = [];
       registerConsultTool({
-        registerTool: (_name: string, _def: unknown, fn: (input: unknown) => Promise<unknown>) => {
-          handlers.push(fn);
-        },
-        server: {
-          sendLoggingMessage: async () => undefined,
+        registerTool: (
+          _name: string,
+          _def: unknown,
+          fn: (input: unknown, context: unknown) => Promise<unknown>,
+        ) => {
+          handlers.push((input) => fn(input, { mcpReq: { log: async () => undefined } }));
         },
       } as unknown as Parameters<typeof registerConsultTool>[0]);
       const handler = handlers[0];
@@ -518,11 +711,12 @@ describe("summarizeModelRunsForConsult", () => {
     try {
       const handlers: Array<(input: unknown) => Promise<unknown>> = [];
       registerConsultTool({
-        registerTool: (_name: string, _def: unknown, fn: (input: unknown) => Promise<unknown>) => {
-          handlers.push(fn);
-        },
-        server: {
-          sendLoggingMessage: async () => undefined,
+        registerTool: (
+          _name: string,
+          _def: unknown,
+          fn: (input: unknown, context: unknown) => Promise<unknown>,
+        ) => {
+          handlers.push((input) => fn(input, { mcpReq: { log: async () => undefined } }));
         },
       } as unknown as Parameters<typeof registerConsultTool>[0]);
       const handler = handlers[0];
@@ -545,7 +739,7 @@ describe("summarizeModelRunsForConsult", () => {
     }
   });
 
-  test("fails closed for image output over a remote browser service", async () => {
+  test("allows image output over a remote browser service", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "oracle-home-"));
     setOracleHomeDirOverrideForTest(home);
     const prevHost = process.env.ORACLE_REMOTE_HOST;
@@ -555,10 +749,13 @@ describe("summarizeModelRunsForConsult", () => {
     try {
       const handlers: Array<(input: unknown) => Promise<unknown>> = [];
       registerConsultTool({
-        registerTool: (_name: string, _def: unknown, fn: (input: unknown) => Promise<unknown>) => {
-          handlers.push(fn);
+        registerTool: (
+          _name: string,
+          _def: unknown,
+          fn: (input: unknown, context: unknown) => Promise<unknown>,
+        ) => {
+          handlers.push((input) => fn(input, { mcpReq: { log: async () => undefined } }));
         },
-        server: { sendLoggingMessage: async () => undefined },
       } as unknown as Parameters<typeof registerConsultTool>[0]);
       const handler = handlers[0];
       if (!handler) throw new Error("handler not registered");
@@ -569,15 +766,11 @@ describe("summarizeModelRunsForConsult", () => {
         model: "gpt-5.5",
         prompt: "make an image",
         files: [],
-        // Path under the Oracle home so containment passes and we reach the
-        // remote guard rather than the path check.
         generateImage: path.join(home, "generated", "img.png"),
       })) as { isError?: boolean; content: Array<{ type: "text"; text: string }> };
 
-      expect(result.isError).toBe(true);
-      expect(result.content[0]?.text).toMatch(
-        /image output is not supported with a remote browser/i,
-      );
+      expect(result.isError).not.toBe(true);
+      expect(result.content[0]?.text).toContain("image-aware wait/download path");
     } finally {
       if (prevHost === undefined) delete process.env.ORACLE_REMOTE_HOST;
       else process.env.ORACLE_REMOTE_HOST = prevHost;
@@ -594,10 +787,13 @@ describe("summarizeModelRunsForConsult", () => {
     try {
       const handlers: Array<(input: unknown) => Promise<unknown>> = [];
       registerConsultTool({
-        registerTool: (_name: string, _def: unknown, fn: (input: unknown) => Promise<unknown>) => {
-          handlers.push(fn);
+        registerTool: (
+          _name: string,
+          _def: unknown,
+          fn: (input: unknown, context: unknown) => Promise<unknown>,
+        ) => {
+          handlers.push((input) => fn(input, { mcpReq: { log: async () => undefined } }));
         },
-        server: { sendLoggingMessage: async () => undefined },
       } as unknown as Parameters<typeof registerConsultTool>[0]);
       const handler = handlers[0];
       if (!handler) throw new Error("handler not registered");
@@ -622,11 +818,12 @@ describe("summarizeModelRunsForConsult", () => {
   test("rejects unsupported consult fields instead of silently ignoring them", async () => {
     const handlers: Array<(input: unknown) => Promise<unknown>> = [];
     registerConsultTool({
-      registerTool: (_name: string, _def: unknown, fn: (input: unknown) => Promise<unknown>) => {
-        handlers.push(fn);
-      },
-      server: {
-        sendLoggingMessage: async () => undefined,
+      registerTool: (
+        _name: string,
+        _def: unknown,
+        fn: (input: unknown, context: unknown) => Promise<unknown>,
+      ) => {
+        handlers.push((input) => fn(input, { mcpReq: { log: async () => undefined } }));
       },
     } as unknown as Parameters<typeof registerConsultTool>[0]);
     const handler = handlers[0];

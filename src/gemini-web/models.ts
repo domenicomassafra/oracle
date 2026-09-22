@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { BrowserLogger } from "../browser/types.js";
 
 export type GeminiWebModelId =
+  | "gemini-3.1-flash-lite"
+  | "gemini-3.5-flash"
   | "gemini-3.5-flash-lite"
   | "gemini-3.6-flash"
   | "gemini-3.1-pro"
@@ -14,42 +16,51 @@ interface GeminiWebModelSpec {
   hash: string;
   modelCode: number;
   thinkingCode: number;
+  capacity: number;
 }
 
 const MODEL_SPECS: Record<GeminiWebModelId, GeminiWebModelSpec> = {
+  "gemini-3.1-flash-lite": {
+    hash: "1d44b34bcaa1c04d",
+    modelCode: 6,
+    thinkingCode: 1,
+    capacity: 2,
+  },
+  "gemini-3.5-flash": {
+    hash: "56fdd199312815e2",
+    modelCode: 1,
+    thinkingCode: 1,
+    capacity: 2,
+  },
   "gemini-3.5-flash-lite": {
     hash: "cf41b0e0dd7d53e5",
     modelCode: 6,
     thinkingCode: 1,
+    capacity: 2,
   },
   "gemini-3.6-flash": {
     hash: "fbb127bbb056c959",
     modelCode: 1,
     thinkingCode: 1,
+    capacity: 2,
   },
   "gemini-3.1-pro": {
-    hash: "9d8ca3786ebdfbea",
+    hash: "e6fa609c3fa255c0",
     modelCode: 3,
     thinkingCode: 1,
+    capacity: 2,
   },
   "gemini-3-pro-deep-think": {
-    hash: "9d8ca3786ebdfbea",
-    modelCode: 3,
-    thinkingCode: 3,
+    hash: "e051ce1aa80aa576",
+    modelCode: 5,
+    thinkingCode: 2,
+    capacity: 2,
   },
 };
 
-let clientId: string | undefined;
+const clientId = randomUUID().toUpperCase();
 
-function getGeminiWebClientId(): string {
-  clientId ??= randomUUID().toUpperCase();
-  return clientId;
-}
-
-export function buildGeminiWebModelHeader(
-  model: GeminiWebModelId,
-  webClientId = getGeminiWebClientId(),
-): string {
+export function buildGeminiWebModelHeader(model: GeminiWebModelId, webClientId = clientId): string {
   const spec = MODEL_SPECS[model];
   return JSON.stringify([
     1,
@@ -63,13 +74,21 @@ export function buildGeminiWebModelHeader(
     [4, 5, 6, 8],
     null,
     null,
-    3,
+    spec.capacity,
     null,
     null,
     spec.modelCode,
     spec.thinkingCode,
     webClientId,
   ]);
+}
+
+export function getGeminiWebModelSelection(model: GeminiWebModelId): {
+  modelCode: number;
+  thinkingCode: number;
+} {
+  const { modelCode, thinkingCode } = MODEL_SPECS[model];
+  return { modelCode, thinkingCode };
 }
 
 export function resolveGeminiWebModel(
@@ -85,6 +104,10 @@ export function resolveGeminiWebModel(
     case "gemini-3-pro":
     case "gemini-3.0-pro":
       return "gemini-3.1-pro";
+    case "gemini-3.5-flash":
+      return "gemini-3.5-flash";
+    case "gemini-3.1-flash-lite":
+      return "gemini-3.1-flash-lite";
     case "gemini-3.6-flash":
       return "gemini-3.6-flash";
     case "gemini-3.5-flash-lite":
@@ -98,7 +121,7 @@ export function resolveGeminiWebModel(
     case "gemini-2.5-pro":
       return "gemini-3.1-pro";
     case "gemini-2.5-flash":
-      return "gemini-3.5-flash-lite";
+      return "gemini-3.1-flash-lite";
     default:
       if (normalized.startsWith("gemini-") || normalized.includes("gemini")) {
         log?.(

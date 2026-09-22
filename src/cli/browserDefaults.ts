@@ -8,8 +8,12 @@ import type {
   BrowserModelStrategy,
   BrowserResearchMode,
 } from "../browser/types.js";
+import { isGpt6ProAlias } from "./browserConfig.js";
 
 export interface BrowserDefaultsOptions {
+  model?: string;
+  remoteChrome?: string;
+  copyProfile?: string;
   chatgptUrl?: string;
   browserUrl?: string;
   browserChromeProfile?: string;
@@ -18,6 +22,7 @@ export interface BrowserDefaultsOptions {
   browserAttachRunning?: boolean;
   browserTimeout?: string | number;
   browserInputTimeout?: string | number;
+  browserApprovalWait?: string | number;
   browserAttachmentTimeout?: string | number;
   browserRecheckDelay?: string | number;
   browserRecheckTimeout?: string | number;
@@ -36,6 +41,7 @@ export interface BrowserDefaultsOptions {
   browserModelStrategy?: BrowserModelStrategy;
   browserThinkingTime?: ThinkingTimeLevel;
   browserResearch?: BrowserResearchMode;
+  browserCaptureProviderNative?: boolean;
   browserArchive?: BrowserArchiveMode;
   browserManualLogin?: boolean;
   browserManualLoginProfileDir?: string | null;
@@ -61,6 +67,17 @@ export function applyBrowserDefaultsFromConfig(
     (isUnset("browserAttachRunning") && browser.attachRunning === true);
   const currentModelRequestedByCli =
     options.browserModelStrategy === "current" && getSource("browserModelStrategy") === "cli";
+  const gpt6ProRequestedByCli = getSource("model") === "cli" && isGpt6ProAlias(options.model);
+
+  if (
+    !options.copyProfile &&
+    isUnset("remoteChrome") &&
+    options.remoteChrome === undefined &&
+    browser.remoteChrome
+  ) {
+    const { host, port } = browser.remoteChrome;
+    options.remoteChrome = `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
+  }
 
   const configuredChatgptUrl = browser.chatgptUrl ?? browser.url;
   const cliChatgptSet = options.chatgptUrl !== undefined || options.browserUrl !== undefined;
@@ -99,6 +116,9 @@ export function applyBrowserDefaultsFromConfig(
   }
   if (isUnset("browserInputTimeout") && typeof browser.inputTimeoutMs === "number") {
     options.browserInputTimeout = String(browser.inputTimeoutMs);
+  }
+  if (isUnset("browserApprovalWait") && typeof browser.approvalWaitMs === "number") {
+    options.browserApprovalWait = String(browser.approvalWaitMs);
   }
   if (isUnset("browserAttachmentTimeout") && typeof browser.attachmentTimeoutMs === "number") {
     options.browserAttachmentTimeout = String(browser.attachmentTimeoutMs);
@@ -154,10 +174,17 @@ export function applyBrowserDefaultsFromConfig(
   }
   if (
     !currentModelRequestedByCli &&
+    !gpt6ProRequestedByCli &&
     isUnset("browserThinkingTime") &&
     browser.thinkingTime !== undefined
   ) {
     options.browserThinkingTime = normalizeThinkingTimeLevel(browser.thinkingTime) ?? undefined;
+  }
+  if (
+    isUnset("browserCaptureProviderNative") &&
+    typeof browser.captureProviderNative === "boolean"
+  ) {
+    options.browserCaptureProviderNative = browser.captureProviderNative;
   }
   if (isUnset("browserResearch") && browser.researchMode !== undefined) {
     options.browserResearch = browser.researchMode;

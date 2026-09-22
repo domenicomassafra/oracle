@@ -8,6 +8,7 @@ import {
 } from "../constants.js";
 import { logDomFailure } from "../domDebug.js";
 import { buildClickDispatcher } from "./domEvents.js";
+import { throwIfThrottled } from "../chatgptThrottle.js";
 import { delay } from "../utils.js";
 
 const LEGACY_PRO_VERSION_WORD_TOKENS = ["5 4", "5 2", "5 1", "5 0", "gpt 5 pro"] as const;
@@ -36,15 +37,35 @@ export async function ensureModelSelection(
   desiredModel: string,
   logger: BrowserLogger,
   strategy: BrowserModelStrategy = "select",
-  options: { buttonWaitMs?: number; buttonPollMs?: number } = {},
+  options: { buttonWaitMs?: number; buttonPollMs?: number; implicitDefault?: boolean } = {},
 ): Promise<BrowserModelSelectionEvidence> {
   const buttonWaitMs = options.buttonWaitMs ?? MODEL_BUTTON_WAIT_MS;
   const buttonPollMs = options.buttonPollMs ?? MODEL_BUTTON_POLL_MS;
-  const deadline = Date.now() + Math.max(0, buttonWaitMs);
+  const probeDeadline = Date.now() + Math.max(0, buttonWaitMs);
+  let deadline: number | undefined;
 
   let result: ModelSelectionResult;
   let announcedWait = false;
   for (;;) {
+    if (options.implicitDefault && strategy === "select") {
+      // Wait for observable selection before a default-driven switch, just as selection waits for the picker.
+      const observed = await Runtime.evaluate({
+        expression: buildModelSelectionExpression(desiredModel, "current"),
+        awaitPromise: true,
+        returnByValue: true,
+      }).catch(() => null);
+      const label = (observed?.result?.value as { label?: unknown } | undefined)?.label;
+      if ((typeof label !== "string" || !label.trim()) && Date.now() < probeDeadline) {
+        await delay(buttonPollMs);
+        continue;
+      }
+      if (typeof label === "string" && isNewerModelLabel(label, desiredModel)) {
+        logger(
+          `[browser] Model selection warning: no model was specified, so Oracle's default will switch ChatGPT from "${label}" to "${desiredModel}" before submission. Pass --model explicitly or --browser-model-strategy current to keep the selected model.`,
+        );
+      }
+    }
+    deadline ??= Date.now() + Math.max(0, buttonWaitMs);
     const outcome = await Runtime.evaluate({
       expression: buildModelSelectionExpression(desiredModel, strategy),
       awaitPromise: true,
@@ -85,6 +106,11 @@ export async function ensureModelSelection(
     }
     case "option-not-found": {
       await logDomFailure(Runtime, logger, "model-switcher-option");
+      // Check for a rate-limit notice before blaming the model name. The notice
+      // is a plain dialog, so its "Got it" button reads as an available option to
+      // the menu scrape — which turns "wait a few minutes" into "your model does
+      // not exist", and sends the reader after the wrong bug.
+      await throwIfThrottled(Runtime, { stage: "model-selection" }, logger);
       const isTemporary = result.hint?.temporaryChat ?? false;
       const available = (result.hint?.availableOptions ?? []).filter(Boolean);
       const availableHint = available.length > 0 ? ` Available: ${available.join(", ")}.` : "";
@@ -98,6 +124,7 @@ export async function ensureModelSelection(
     }
     default: {
       await logDomFailure(Runtime, logger, "model-switcher-button");
+      await throwIfThrottled(Runtime, { stage: "model-selection" }, logger);
       throw new Error(
         "Unable to locate the ChatGPT model selector button. If the desired model is already selected in the browser, retry with --browser-model-strategy current; otherwise retry with --browser-model-strategy ignore to skip model selection.",
       );
@@ -105,11 +132,37 @@ export async function ensureModelSelection(
   }
 }
 
+function isNewerModelLabel(current: string, target: string): boolean {
+  const latest = /^(?:Latest|最新|최신)$/i;
+  if (latest.test(current.trim())) return !latest.test(target.trim());
+  const version = (label: string): [number, number] | null => {
+    const match = label.match(/(?:^|gpt[- ]*|thinking\s+)(\d+)(?:\.(\d+))?/i);
+    return match ? [Number(match[1]), Number(match[2] ?? 0)] : null;
+  };
+  const from = version(current);
+  const to = version(target);
+  return Boolean(from && to && (from[0] > to[0] || (from[0] === to[0] && from[1] > to[1])));
+}
+
 function assertResolvedModelSelection(desiredModel: string, resolvedLabel: string): void {
   const desired = desiredModel.toLowerCase();
   const resolved = resolvedLabel.toLowerCase();
   const normalizedDesired = normalizeResolvedModelLabel(desired);
   const normalizedResolved = normalizeResolvedModelLabel(resolved);
+  if (desired === "latest") {
+    // The advanced radio is localized, but only the documented exact labels are
+    // evidence of GPT-6 Astra. Do not let a generic picker result verify Latest.
+    if (
+      resolvedLabel.normalize("NFC").trim() === "Latest" ||
+      resolvedLabel.normalize("NFC").trim() === "最新" ||
+      resolvedLabel.normalize("NFC").trim() === "최신"
+    ) {
+      return;
+    }
+    throw new Error(
+      `Model picker selected "${resolvedLabel}" while "${desiredModel}" requires GPT-6 Astra (Latest).`,
+    );
+  }
   const wantsGpt56Sol =
     /(?:^| )5 6(?: |$)/.test(normalizedDesired) && normalizedDesired.split(" ").includes("sol");
   if (wantsGpt56Sol) {
@@ -225,6 +278,17 @@ function buildModelSelectionExpression(
     const hasToken = (value, token) => normalizeText(value).split(' ').includes(token);
     // Normalize every candidate token to keep fuzzy matching deterministic.
     const normalizedTarget = normalizeText(PRIMARY_LABEL);
+    // "Latest" (GPT-6 since 2026-09) is a radio in the advanced view whose composer pill reads
+    // "6 Pro" / "6 High"…, while GPT-5.6 Sol's reads "5.6 Pro". Declared up front: getResolvedLabel
+    // runs on the picker-less path before the selection helpers below are initialized.
+    const targetIsLatest = normalizedTarget === 'latest';
+    // ChatGPT localizes the Latest radio itself (for example, Japanese "最新") but
+    // keeps the GPT-6 composer pill numeric. Keep this allow-list exact so GPT-5.6
+    // Sol or an arbitrary localized menu row can never satisfy a Latest request.
+    const isLatestModelLabel = (value) => {
+      const label = String(value ?? '').normalize('NFC').trim();
+      return label === 'Latest' || label === '最新' || label === '최신';
+    };
     const normalizedTokens = Array.from(new Set([normalizedTarget, ...LABEL_TOKENS]))
       .map((token) => normalizeText(token))
       .filter(Boolean);
@@ -366,6 +430,14 @@ function buildModelSelectionExpression(
     };
 
     const getButtonLabel = () => (findModelButton()?.textContent ?? '').trim();
+    // With the picker closed the only evidence for "Latest" is the composer pill, so a version-less
+    // "latest" target must be decided on it: the blank composer signal would otherwise pass as
+    // "already selected" while GPT-5.6 Sol is active. Defined here, before getResolvedLabel, because
+    // the "current" strategy resolves the label before the selection helpers further down exist.
+    const latestButtonSelected = () => {
+      const label = normalizeText(getButtonLabel());
+      return /^(chatgpt |gpt )?6(?![0-9 .]*[0-9])/.test(label) && !/(^| )5 6/.test(label);
+    };
     const getComposerModelLabel = () =>
       (document.querySelector(COMPOSER_MODEL_SIGNAL_SELECTOR)?.textContent ?? '').trim();
     const readComposerModelSignal = () => normalizeText(getComposerModelLabel());
@@ -469,10 +541,10 @@ function buildModelSelectionExpression(
     const ADVANCED_VIEW_SELECTOR = '[data-testid="composer-model-picker-slider-advanced-view"]';
     const INTELLIGENCE_PICKER_SELECTOR = '[data-testid="composer-intelligence-picker-content"]';
     const SUBMENU_OPENER_SELECTOR = '[role="menuitem"][aria-haspopup="menu"]';
-    const ADVANCED_WORDS = ['advanced', 'erweitert', '高级', 'avanzado', 'avancado', 'avance'];
-    const MODEL_WORDS = ['model', 'modell', '模型', 'modelo', 'modello', 'modele'];
+    const ADVANCED_WORDS = ['advanced', 'erweitert', '高级', '고급', 'avanzado', 'avancado', 'avance'];
+    const MODEL_WORDS = ['model', 'modell', '模型', '모델', 'modelo', 'modello', 'modele'];
     const EFFORT_WORDS = [
-      'effort', 'aufwand', '强度', '努力',
+      'effort', 'aufwand', '强度', '努力', '추론 수준',
       'esfuerzo', 'esforco', 'sforzo', 'inspanning', 'wysilek',
     ];
     const pickerNodeLabel = (node) => {
@@ -483,6 +555,7 @@ function buildModelSelectionExpression(
           .toLowerCase()
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')
+          .normalize('NFC')
           .replace(/\\s+/g, ' ')
           .trim();
       } catch {
@@ -536,7 +609,25 @@ function buildModelSelectionExpression(
       if (wantsInstant) return label.includes('instant');
       if (wantsThinking) return Boolean(desiredVersion) && !labelHasProWord(label);
       if (desiredVersion) return true;
+      // A version-less target ("Latest") must match the radio that is actually checked in the
+      // advanced view: the opener's text lists every radio label, so a substring test would
+      // report "Latest" as selected while GPT-5.6 Sol is the checked model.
+      const checkedAdvancedRadio = findCheckedAdvancedModelRadio(parentMenu);
+      if (checkedAdvancedRadio) {
+        const checkedLabel = checkedAdvancedRadio.textContent ?? '';
+        return targetIsLatest
+          ? isLatestModelLabel(checkedLabel)
+          : normalizedTokens.some((token) => token && normalizeText(checkedLabel) === token);
+      }
       return normalizedTokens.some((token) => token && label.includes(token));
+    };
+    const findCheckedAdvancedModelRadio = (menu = null) => {
+      const scope = menu || findUnifiedPickerMenu() || document;
+      return (
+        scope?.querySelector?.(
+          '[data-testid="composer-model-picker-slider-advanced-view"] [role="menuitemradio"][aria-checked="true"]',
+        ) ?? null
+      );
     };
     const getAdvancedModelLabel = () => {
       const opener = findModelSubmenuOpener(findUnifiedPickerMenu());
@@ -544,7 +635,11 @@ function buildModelSelectionExpression(
       const raw = (opener.textContent ?? '').trim();
       const normalized = normalizeText(pickerNodeLabel(opener));
       const version = versionFromLabel(normalized);
-      if (!version) return raw;
+      if (!version) {
+        const checkedAdvancedRadio = findCheckedAdvancedModelRadio(findUnifiedPickerMenu());
+        const checkedLabel = (checkedAdvancedRadio?.textContent ?? '').trim();
+        return checkedLabel || raw;
+      }
       const [major, minor] = version.split('-');
       const suffix = normalized.split(' ').includes('sol') ? ' Sol' : '';
       return 'GPT-' + major + '.' + minor + suffix;
@@ -558,6 +653,17 @@ function buildModelSelectionExpression(
       );
     };
     const getResolvedLabel = (observedOptionLabel = '') => {
+      if (targetIsLatest) {
+        const checkedAdvancedRadio = findCheckedAdvancedModelRadio();
+        if (checkedAdvancedRadio) return (checkedAdvancedRadio.textContent ?? '').trim();
+        // Picker closed: the pill ("6 Pro") is the evidence; report the radio's name so callers
+        // can compare against the requested target instead of the tier-suffixed pill text.
+        if (latestButtonSelected()) return 'Latest';
+        const currentButtonLabel = getButtonLabel();
+        if (currentButtonLabel) return currentButtonLabel;
+        // No picker button at all (e.g. the "current" strategy on a page that hides it): fall back
+        // to the generic composer/observed label resolution below.
+      }
       if (configuredSelectionMatchesTarget()) {
         const variant = getConfiguredVariantLabel();
         const version = formatModelOptionLabel(getConfiguredVersionLabel());
@@ -699,6 +805,13 @@ function buildModelSelectionExpression(
       return COMPOSER_SIGNAL_INCLUDES.some((token) => token && signal.includes(token));
     };
     const activeSelectionMatchesTarget = () => {
+      if (targetIsLatest) {
+        const checkedAdvancedRadio = findCheckedAdvancedModelRadio();
+        if (checkedAdvancedRadio) {
+          return isLatestModelLabel(checkedAdvancedRadio.textContent ?? '');
+        }
+        return latestButtonSelected();
+      }
       if (advancedModelSignalMatchesTarget()) {
         return true;
       }
@@ -749,6 +862,8 @@ function buildModelSelectionExpression(
         node.getAttribute('data-composer-intelligence-pro-effort-action') === 'true' ||
         Boolean(node.closest('[data-model-picker-thinking-effort-action="true"]')) ||
         Boolean(node.closest('[data-composer-intelligence-pro-effort-action="true"]')) ||
+        (isUnifiedPickerMenu(menu) && isSubmenuOpener(node) &&
+          containsPickerWord(pickerNodeLabel(node), EFFORT_WORDS)) ||
         isDetachedProEffortMenu(menu));
     const optionIsSelected = (node) => {
       if (!(node instanceof HTMLElement)) {
@@ -771,6 +886,11 @@ function buildModelSelectionExpression(
 
     const scoreOption = (normalizedText, testid, node) => {
       // Assign a score to every node so we can pick the most likely match without brittle equality checks.
+      // Latest is localized in the advanced radio list. Match the documented labels
+      // exactly instead of falling through to generic scoring, which could select Sol.
+      if (targetIsLatest) {
+        return isLatestModelLabel(node?.textContent ?? '') ? 2000 : 0;
+      }
       if (!normalizedText && !testid) {
         return 0;
       }
@@ -1081,6 +1201,7 @@ function buildModelSelectionExpression(
     const hasModelLikeMenuText = (node) => {
       const text = normalizeText(node?.textContent ?? '');
       return (
+        isLatestModelLabel(node?.textContent ?? '') ||
         text.includes('instant') ||
         text.includes('thinking') ||
         labelHasProWord(text) ||
@@ -1436,6 +1557,11 @@ function buildModelMatchersLiteral(targetModel: string): {
     testIdTokens.add("gpt-5-6");
     testIdTokens.add("gpt5-6");
     testIdTokens.add("gpt56");
+  }
+  if (base === "latest") {
+    // Exact Japanese and Korean labels for the advanced-model Latest radio.
+    push("最新", labelTokens);
+    push("최신", labelTokens);
   }
   // Numeric variations (5.5 <-> 55 <-> gpt-5-5)
   if (base.includes("5.5") || base.includes("5-5") || base.includes("55")) {

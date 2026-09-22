@@ -9,7 +9,10 @@ import {
   acquireManualLoginChromeForRunForTest,
   maybeReuseRunningChromeForTest,
 } from "../../src/browser/index.js";
-import { maybeReuseProjectSourcesChromeForTest } from "../../src/browser/projectSourcesRunner.js";
+import {
+  maybeReuseProjectSourcesChromeForTest,
+  releaseProjectSourcesBrowserTabLeaseForTest,
+} from "../../src/browser/projectSourcesRunner.js";
 import { resolveBrowserConfig } from "../../src/browser/config.js";
 import type { LaunchedChrome } from "chrome-launcher";
 
@@ -93,11 +96,16 @@ describe("maybeReuseRunningChrome", () => {
       { stdio: "ignore" },
     );
     try {
-      await fs.writeFile(path.join(tmpDir, "DevToolsActivePort"), `${port}\n/devtools/browser`, "utf8");
+      await fs.writeFile(
+        path.join(tmpDir, "DevToolsActivePort"),
+        `${port}\n/devtools/browser`,
+        "utf8",
+      );
       await fs.writeFile(path.join(tmpDir, "chrome.pid"), `${stale.pid ?? 0}\n`, "utf8");
       const reused = await maybeReuseRunningChromeForTest(tmpDir, noopLogger, {
         waitForPortMs: 0,
         probe: vi.fn(async () => ({ ok: true as const })),
+        discover: vi.fn(async () => ({ pid: current.pid!, port })),
       });
       expect(reused?.port).toBe(port);
       expect(reused?.pid).toBe(current.pid);
@@ -245,5 +253,31 @@ describe("maybeReuseRunningChrome", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  test("Project Sources surfaces unlock failure after final-lease cleanup succeeds", async () => {
+    const logger = vi.fn();
+    const releaseFailure = new Error("project sources registry unlock exhausted");
+    const lease = {
+      id: "project-sources-unlock-failure",
+      update: vi.fn(async () => undefined),
+      release: vi.fn(async ({ onRelease }) => {
+        await onRelease?.({ isLastLease: true });
+        throw releaseFailure;
+      }),
+    };
+
+    const result = await releaseProjectSourcesBrowserTabLeaseForTest({
+      lease,
+      terminateSharedChrome: async () => true,
+      logger,
+    });
+
+    expect(result).toEqual({
+      keepBrowserOpen: false,
+      terminationHandled: true,
+      releaseError: releaseFailure,
+    });
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("restart Oracle/Codex MCP"));
   });
 });

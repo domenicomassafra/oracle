@@ -1,3 +1,4 @@
+import { isGpt6Alias, isGpt6ProAlias } from "./browserConfig.js";
 import { InvalidArgumentError, type Command } from "commander";
 import { parseDuration } from "../duration.js";
 import path from "node:path";
@@ -222,10 +223,20 @@ function isGeminiDeepThinkAlias(normalized: string): boolean {
 
 export function resolveApiModel(modelValue: string): ModelName {
   const normalized = normalizeModelOption(modelValue).toLowerCase();
-  if (normalized.includes("claude") && normalized.includes("sonnet") && normalized.includes("5")) {
+  if (
+    !normalized.includes("/") &&
+    normalized.includes("claude") &&
+    normalized.includes("sonnet") &&
+    normalized.includes("5")
+  ) {
     return "claude-sonnet-5";
   }
-  if (normalized.includes("claude") && normalized.includes("haiku") && normalized.includes("4.5")) {
+  if (
+    !normalized.includes("/") &&
+    normalized.includes("claude") &&
+    normalized.includes("haiku") &&
+    normalized.includes("4.5")
+  ) {
     return "claude-haiku-4.5";
   }
   if (normalized in MODEL_CONFIGS) {
@@ -233,6 +244,14 @@ export function resolveApiModel(modelValue: string): ModelName {
   }
   if (normalized.includes("/")) {
     return normalized as ModelName;
+  }
+  if (isGpt6ProAlias(normalized)) {
+    throw new InvalidArgumentError(
+      "GPT-6 Pro is an API reasoning mode, not a model slug. Use --model gpt-6-astra --reasoning-mode pro (or --engine browser --model gpt-6-pro).",
+    );
+  }
+  if (isGpt6Alias(normalized)) {
+    return "gpt-6-astra";
   }
   const gpt56Label = parseBrowserGpt56Label(normalized);
   if (gpt56Label?.variant.split(" ").includes("pro")) {
@@ -293,11 +312,7 @@ export function resolveApiModel(modelValue: string): ModelName {
     );
   }
   if (normalized.includes("gemini")) {
-    if (
-      normalized.includes("3.5") &&
-      normalized.includes("flash") &&
-      normalized.includes("lite")
-    ) {
+    if (normalized.includes("3.5") && normalized.includes("flash") && normalized.includes("lite")) {
       return "gemini-3.5-flash-lite";
     }
     if (normalized.includes("3.6") && normalized.includes("flash")) {
@@ -338,10 +353,20 @@ export function isGpt56BrowserLabel(modelValue: string): boolean {
 
 export function inferModelFromLabel(modelValue: string): ModelName {
   const normalized = normalizeModelOption(modelValue).toLowerCase();
-  if (normalized.includes("claude") && normalized.includes("sonnet") && normalized.includes("5")) {
+  if (
+    !normalized.includes("/") &&
+    normalized.includes("claude") &&
+    normalized.includes("sonnet") &&
+    normalized.includes("5")
+  ) {
     return "claude-sonnet-5";
   }
-  if (normalized.includes("claude") && normalized.includes("haiku") && normalized.includes("4.5")) {
+  if (
+    !normalized.includes("/") &&
+    normalized.includes("claude") &&
+    normalized.includes("haiku") &&
+    normalized.includes("4.5")
+  ) {
     return "claude-haiku-4.5";
   }
   if (!normalized) {
@@ -352,6 +377,14 @@ export function inferModelFromLabel(modelValue: string): ModelName {
   }
   if (normalized.includes("/")) {
     return normalized as ModelName;
+  }
+  // gpt-6 / gpt-6-pro / latest: ChatGPT's "Latest" model (GPT-6 Astra). The browser-only -pro alias
+  // is passed through so its Pro tier default survives (resolveDefaultBrowserThinkingTime).
+  if (isGpt6ProAlias(normalized)) {
+    return "gpt-6-pro" as ModelName;
+  }
+  if (isGpt6Alias(normalized)) {
+    return "gpt-6-astra";
   }
   if (normalized.includes("grok")) {
     return "grok-4.1";
@@ -369,11 +402,7 @@ export function inferModelFromLabel(modelValue: string): ModelName {
     return "gemini-3-pro-deep-think" as ModelName;
   }
   if (normalized.includes("gemini")) {
-    if (
-      normalized.includes("3.5") &&
-      normalized.includes("flash") &&
-      normalized.includes("lite")
-    ) {
+    if (normalized.includes("3.5") && normalized.includes("flash") && normalized.includes("lite")) {
       return "gemini-3.5-flash-lite";
     }
     if (normalized.includes("3.6") && normalized.includes("flash")) {

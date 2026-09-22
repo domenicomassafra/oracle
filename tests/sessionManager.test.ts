@@ -11,6 +11,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { setOracleHomeDirOverrideForTest } from "../src/oracleHome.js";
@@ -134,6 +135,17 @@ describe("session identifiers", () => {
 });
 
 describe("session lifecycle", () => {
+  test("new browser sessions cannot be mistaken for legacy sessions before submission", async () => {
+    const metadata = await sessionModule.initializeSession(
+      { prompt: "Pending browser prompt", model: "gpt-5.5", mode: "browser" },
+      "/tmp/cwd",
+    );
+    const stored = JSON.parse(
+      await readFile(path.join(sessionModule.getSessionsDir(), metadata.id, "meta.json"), "utf8"),
+    );
+    expect(stored.browser.runtime.submittedPromptHash).toBeNull();
+  });
+
   test("initializeSession writes metadata, request, and log files", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-04-01T00:00:00Z"));
@@ -225,6 +237,35 @@ describe("session lifecycle", () => {
     const updated = await sessionModule.readSessionMetadata(meta.id);
     expect(updated?.status).toBe("complete");
     expect(updated?.promptPreview).toBe("value");
+    const sessionFiles = await readdir(path.join(sessionModule.getSessionsDir(), meta.id));
+    expect(sessionFiles.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("retries transient metadata rename failures without leaving temporary files", async () => {
+    const meta = await sessionModule.initializeSession(
+      { prompt: "Retry metadata rename", model: "gpt-5.2-pro" },
+      "/tmp/cwd",
+    );
+    const originalRename = fs.rename.bind(fs);
+    let attempts = 0;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      attempts += 1;
+      if (attempts <= 2) {
+        throw Object.assign(new Error("transient Windows metadata lock"), { code: "EPERM" });
+      }
+      return originalRename(source, target);
+    });
+
+    try {
+      await sessionModule.updateSessionMetadata(meta.id, { promptPreview: "retry succeeded" });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(attempts).toBe(3);
+    expect((await sessionModule.readSessionMetadata(meta.id))?.promptPreview).toBe(
+      "retry succeeded",
+    );
     const sessionFiles = await readdir(path.join(sessionModule.getSessionsDir(), meta.id));
     expect(sessionFiles.filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
@@ -432,6 +473,44 @@ describe("session lifecycle", () => {
     );
     expect(rawAfterList.status).toBe("error");
     expect(rawAfterList.errorMessage).toMatch(/chrome/i);
+  });
+
+  test("marks running browser sessions as error when only controllerPid is recorded and it is gone", async () => {
+    // chromePid / chromePort absent → signals[] starts empty → falls through to controllerPid check
+    const meta = await sessionModule.initializeSession(
+      { prompt: "Controller dead", model: "gpt-5.2-pro", mode: "browser" },
+      "/tmp/cwd",
+    );
+    await sessionModule.updateSessionMetadata(meta.id, {
+      status: "running",
+      mode: "browser",
+      browser: {
+        runtime: {
+          controllerPid: 999_999_999, // definitely not alive
+        },
+      },
+    });
+    const refreshed = await sessionModule.readSessionMetadata(meta.id);
+    expect(refreshed?.status).toBe("error");
+    expect(refreshed?.errorMessage).toMatch(/chrome.*no longer reachable/i);
+  });
+
+  test("keeps running browser sessions when only controllerPid is recorded and it is alive", async () => {
+    const meta = await sessionModule.initializeSession(
+      { prompt: "Controller live", model: "gpt-5.2-pro", mode: "browser" },
+      "/tmp/cwd",
+    );
+    await sessionModule.updateSessionMetadata(meta.id, {
+      status: "running",
+      mode: "browser",
+      browser: {
+        runtime: {
+          controllerPid: process.pid, // current process is definitely alive
+        },
+      },
+    });
+    const refreshed = await sessionModule.readSessionMetadata(meta.id);
+    expect(refreshed?.status).toBe("running");
   });
 });
 

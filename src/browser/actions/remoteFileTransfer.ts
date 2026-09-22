@@ -5,13 +5,14 @@ import { waitForAttachmentVisible } from "./attachments.js";
 import { delay } from "../utils.js";
 import { logDomFailure } from "../domDebug.js";
 import { transferAttachmentViaDataTransfer } from "./attachmentDataTransfer.js";
+import { beginAttachmentEvidence } from "./attachmentEvidence.js";
 
 /**
  * Upload file to remote Chrome by transferring content via CDP
  * Used when browser is on a different machine than CLI
  */
 export async function uploadAttachmentViaDataTransfer(
-  deps: { runtime: ChromeClient["Runtime"]; dom?: ChromeClient["DOM"] },
+  deps: { runtime: ChromeClient["Runtime"]; dom?: ChromeClient["DOM"]; navigationUrl?: string },
   attachment: BrowserAttachment,
   logger: BrowserLogger,
 ): Promise<void> {
@@ -39,17 +40,19 @@ export async function uploadAttachmentViaDataTransfer(
     throw new Error("Unable to locate ChatGPT file attachment input.");
   }
 
+  const evidenceId = await beginAttachmentEvidence(runtime, path.basename(attachment.path));
   const transferResult = await transferAttachmentViaDataTransfer(
     runtime,
     attachment,
     fileInputSelector,
+    deps.navigationUrl,
   );
 
   logger(`File transferred: ${transferResult.fileName} (${transferResult.size} bytes)`);
 
   // Give ChatGPT a moment to process the file
   await delay(500);
-  await waitForAttachmentVisible(runtime, transferResult.fileName, 10_000, logger);
+  await waitForAttachmentVisible(runtime, transferResult.fileName, 10_000, logger, evidenceId);
 
   logger("Attachment queued");
 }

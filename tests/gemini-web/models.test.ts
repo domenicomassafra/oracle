@@ -9,23 +9,31 @@ import {
 describe("Gemini web model mapping", () => {
   it.each([
     [
+      "gemini-3.1-flash-lite",
+      '[1,null,null,null,"1d44b34bcaa1c04d",null,null,1,[4,5,6,8],null,null,2,null,null,6,1,"client-proof"]',
+    ],
+    [
+      "gemini-3.5-flash",
+      '[1,null,null,null,"56fdd199312815e2",null,null,1,[4,5,6,8],null,null,2,null,null,1,1,"client-proof"]',
+    ],
+    [
       "gemini-3.5-flash-lite",
-      '[1,null,null,null,"cf41b0e0dd7d53e5",null,null,1,[4,5,6,8],null,null,3,null,null,6,1,"TEST-ID"]',
+      '[1,null,null,null,"cf41b0e0dd7d53e5",null,null,1,[4,5,6,8],null,null,2,null,null,6,1,"client-proof"]',
     ],
     [
       "gemini-3.6-flash",
-      '[1,null,null,null,"fbb127bbb056c959",null,null,1,[4,5,6,8],null,null,3,null,null,1,1,"TEST-ID"]',
+      '[1,null,null,null,"fbb127bbb056c959",null,null,1,[4,5,6,8],null,null,2,null,null,1,1,"client-proof"]',
     ],
     [
       "gemini-3.1-pro",
-      '[1,null,null,null,"9d8ca3786ebdfbea",null,null,1,[4,5,6,8],null,null,3,null,null,3,1,"TEST-ID"]',
+      '[1,null,null,null,"e6fa609c3fa255c0",null,null,1,[4,5,6,8],null,null,2,null,null,3,1,"client-proof"]',
     ],
     [
       "gemini-3-pro-deep-think",
-      '[1,null,null,null,"9d8ca3786ebdfbea",null,null,1,[4,5,6,8],null,null,3,null,null,3,3,"TEST-ID"]',
+      '[1,null,null,null,"e051ce1aa80aa576",null,null,1,[4,5,6,8],null,null,2,null,null,5,2,"client-proof"]',
     ],
   ] as const)("builds the captured %s header", (model, expected) => {
-    expect(buildGeminiWebModelHeader(model, "TEST-ID")).toBe(expected);
+    expect(buildGeminiWebModelHeader(model, "client-proof")).toBe(expected);
   });
 
   it("uses current defaults", () => {
@@ -38,9 +46,11 @@ describe("Gemini web model mapping", () => {
     ["Gemini 3 Pro", "gemini-3.1-pro"],
     ["gemini-3.0-pro", "gemini-3.1-pro"],
     ["Gemini 3.6 Flash", "gemini-3.6-flash"],
+    ["Gemini 3.5 Flash", "gemini-3.5-flash"],
+    ["Gemini 3.1 Flash-Lite", "gemini-3.1-flash-lite"],
     ["Gemini 3.5 Flash-Lite", "gemini-3.5-flash-lite"],
     ["gemini-2.5-pro", "gemini-3.1-pro"],
-    ["gemini-2.5-flash", "gemini-3.5-flash-lite"],
+    ["gemini-2.5-flash", "gemini-3.1-flash-lite"],
     ["gemini-3-deep-think", "gemini-3-pro-deep-think"],
   ] as const)("resolves %s to %s", (input, expected) => {
     expect(resolveGeminiWebModel(input)).toBe(expected);

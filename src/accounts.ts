@@ -137,6 +137,56 @@ export function resolveBrowserAccount(input: {
   };
 }
 
+export function resolveBrowserAccountByProfileKey(input: {
+  config: UserConfig;
+  model: string;
+  profileKey?: string | null;
+  capability: AccountCapability;
+}): ResolvedBrowserAccount | null {
+  const requestedKey = input.profileKey?.trim();
+  if (!requestedKey) {
+    return resolveBrowserAccount({
+      config: input.config,
+      model: input.model,
+      capability: input.capability,
+    });
+  }
+  const pool = input.config.accountPool;
+  if (!pool?.accounts) {
+    throw new Error("Oracle account pool is not configured for the requested profile key.");
+  }
+  const matches: string[] = [];
+  for (const id of Object.keys(pool.accounts)) {
+    let account: ResolvedBrowserAccount | null;
+    try {
+      account = resolveBrowserAccount({
+        config: input.config,
+        model: input.model,
+        requestedAccount: id,
+        capability: input.capability,
+      });
+    } catch {
+      continue;
+    }
+    if (account && redactProfileKey(account.profileDir, account.chromeProfile) === requestedKey) {
+      matches.push(id);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? "No Oracle browser account matches the requested redacted profile key."
+        : "The requested redacted profile key is not unique.",
+    );
+  }
+  return resolveBrowserAccount({
+    config: input.config,
+    model: input.model,
+    requestedAccount: matches[0],
+    capability: input.capability,
+  });
+}
+
 /** Real browser adapter name for a resolved provider. Never reused across providers. */
 export function providerAdapterFor(provider: BrowserAccountConfig["providers"][number]): string {
   switch (provider) {

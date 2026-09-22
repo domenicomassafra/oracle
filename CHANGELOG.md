@@ -1,10 +1,125 @@
 # Changelog
 
-## 0.17.4 — Unreleased
+## Unreleased
+
+- Browser: preserve reachable IPv6 Chrome profiles and release failed DevTools probe timers promptly; thanks @devYRPauli.
+
+## 0.21.2 - 2026-09-22
+
+**Highlights:** Reliable process identity on localized systems and working verbose CLI help.
+
+- Browser: preserve process identity and stale-lock recovery on non-English systems by normalizing process timestamps; thanks @zianai.
+- CLI: show advanced options with `--help --verbose` and `-h --verbose` in either flag order, without starting a session; fixes #500, thanks @postoso.
+- Dependencies: refresh provider SDKs, terminal rendering and progress, token pricing, and browser tooling while retaining Node >=24 and compatible Gemini HTTP dispatch; thanks @dependabot.
+
+## 0.21.1 - 2026-09-14
+
+**Highlights:** Live Gemini answers work out of the box.
+
+- Gemini: accept Google's large security and reporting response headers automatically so live web answers work without a Node header-limit workaround, including through remote hosts.
+- Remote: dispatch Gemini browser models through the host's Gemini web executor for new runs and restarts, preserve host-only authentication and Gemini text options, and support the host's running Chrome connection. Fixes #392; thanks @solomonneas.
+
+## 0.21.0 - 2026-09-14
+
+**Highlights:** Opt-in ChatGPT conversation records and independent turn digests provide evidence of answer fidelity.
+
+- Browser: optionally save ChatGPT’s verbatim conversation record and independent turn digests, with answer fidelity evidence and best-effort fallback; thanks @frontierkodiak.
+
+## 0.20.3 - 2026-09-13
+
+**Highlights:** Gemini is selected consistently across CLI, MCP, and detached workers; cookie values are redacted from verbose logs.
+
+- Browser: select Gemini consistently for local CLI, MCP, and detached workers, preserve saved Gemini options and HTTP cancellation, and reject unsupported remote Gemini requests before submission.
+- Browser: redact inline cookie values in verbose session logs while preserving credentials for execution.
+- Browser: recognize prompt echoes across whitespace changes, preserve literal backslashes, and share prompt-preview matching between sidebar lookup and recovery.
+- Dependencies: update Google GenAI to 2.22.0, Zod to 4.6.2, and the Chrome DevTools protocol snapshot; refresh transitive dependencies within the two-day release-age policy.
+- Dependencies: refresh OpenAI, Chrome DevTools protocol, Hono, Vite, and pnpm; remove unused SDK/type packages while retaining Node >=24 and the two-day release-age policy.
+- Tests: complete the Vitest 5 migration, keep runner and V8 coverage versions aligned, and verify Node 24 and 26 across Linux, macOS, and Windows with coverage on Linux; retain the Node >=24 runtime floor.
+
+## 0.20.2 - 2026-09-11
+
+**Highlights:** Fewer Chrome approval prompts, reliable browser harvest recovery, and generated-image delivery across remote hosts.
+
+- Browser: reuse one DevTools connection per browser endpoint and Oracle process across discovery, page sessions, and service requests, while keeping cancellation local and reconnecting after a real disconnect. Fixes #484.
+- Browser: recover saved attach-running conversations through refreshed browser WebSocket metadata, keep transient status notices out of prompt verification, and report actionable harvest errors. Fixes #482.
+- Remote: transfer generated images to the requested client path and numbered siblings, require image-capable hosts before submission, and omit host-only save locations from answers; thanks @malvarezcastillo.
+- Browser: warn before an implicit default switches away from a visibly newer selected model, including delayed picker rendering, while preserving explicit models, saved preferences, and current-model behavior. Fixes #375.
+- Browser: recognize the exact Korean Latest label (`최신`) during selection and verification; thanks @thisisjun786.
+- Dependencies: update Zod to 4.6.1 while retaining Node >=24 and the two-day release-age policy.
+
+## 0.20.1 - 2026-09-11
+
+**Highlights:** Safer browser recovery and cancellation, with reliable effort selection across saved defaults and quota-limited accounts.
+
+- Browser: verify new-session harvests against the committed user turn, preserve original output on mismatch, and retain legacy recovery with an explicit unverified warning; thanks @pdurlej.
+- CLI: cancel detached browser consultations with truthful terminal status, preserve kept tabs, and remove late cancellation requests after completion; thanks @pdurlej.
+- Browser: verify Extra High on quota-limited four-tier effort sliders and reject unavailable Pro before input or submission. Fixes #472; thanks @ventianima-lab.
+- CLI: preserve explicitly requested Pro effort over saved browser defaults while retaining explicit effort overrides and config-only preferences; thanks @pdurlej.
+- Browser: retry unavailable controller identity probes instead of caching failures for the process lifetime, and stabilize native Windows lease verification.
+- Dependencies: refresh OpenAI, Zod, Inquirer, TokenTally, Node types, formatting/lint tooling, and the pinned Chrome DevTools protocol while retaining Node >=24 and the two-day release-age policy.
+
+## 0.20.0 - 2026-09-07
+
+**Highlights:** GPT-6 Astra API and ChatGPT Latest support, explicit Web Search, and safe cleanup after browser recovery.
+
+- API/browser: support GPT-6 Astra with model-specific reasoning validation, ChatGPT Latest selection, localized effort controls, and verified Pro requests; preserve browser aliases during CLI engine discovery. Thanks @oraclexing, @malvarezcastillo, @FNDEVVE, and @kiyo-e.
+- Browser: add the opt-in --browser-research search mode and MCP equivalent, verifying the English Web Search hint and staged prompt before sending, including bundled attachments; thanks @DragonFSKY.
+- Browser: let incomplete controllers exit without losing recoverable tabs, then retire explicitly owned tabs only after recovered answers and completed sessions are saved; preserve borrowed, kept, generating, reclaimed, and actively controlled targets. Fixes #435; thanks @lhysin.
+- Browser: capture visible Deep Research plan titles, steps, and planning/researching state, skip an already-finished countdown, and preserve existing session-status and submission behavior; thanks @oraclexing.
+- Browser: recognize Chinese Deep Research menu, selected-tool, and add-files controls while preserving compact English labels; thanks @oraclexing.
+- Dependencies: update Sweet Cookie to 0.4.3 and TokenTally to 0.1.5 while retaining Node >=24 and the two-day release-age policy.
+
+## 0.19.0 - 2026-09-07
+
+**Highlights:** Durable detached MCP consultations, modern and legacy MCP client support, and clearer browser capture failures with preserved recovery evidence.
+
+- MCP: start local consultations with opt-in detached workers and wait for durable completion without cancelling the run when a client times out, cancels a wait, or reconnects. Fixes #429; thanks @oraclexing.
+- MCP: support the modern 2026-07-28 protocol through SDK v2 while preserving legacy stdio clients, tool contracts, session resources, and request-scoped progress logging. Fixes #360; thanks @fredluz.
+- Browser: keep attachment uploads and sends in the original chat, validate exact controls at delivery, and stop context/focus races without replaying a dispatched action; thanks @oraclexing.
+- Browser: optionally export captured downloadable files beside --write-output with --write-artifacts, preserving canonical artifacts, validating hashes, and avoiding filename collisions; thanks @gwelinder.
+- Browser: persist and display thinking-effort selection evidence, including remote results, without treating unverified or disabled options as confirmed selections; thanks @frontierkodiak.
+- Remote: add opt-in bounded concurrent run admission with FIFO queuing, host-cap enforcement, cancellation, and isolated artifacts while preserving default single-flight HTTP 409 behavior; thanks @frontierkodiak.
+- Remote: honor the service host’s attach-running, remote-Chrome, and approval-wait settings, reusing its signed-in browser without launching a separate manual-login Chrome while keeping routing under host control.
+- Browser: preserve shared Chrome across concurrent manual-login controllers, verify final lease ownership before shutdown, and harden lock recovery against transient process probes; thanks @oraclexing.
+- Browser: make each Chrome remote-debugging approval wait configurable with --browser-approval-wait, preserve the 20-second default, and show progress while waiting for per-connection approval.
+- Browser: wait for effort slider controls to mount and become visible before selecting the requested tier; thanks @ShunmeiCho.
+- Browser: detect when a later harvest conflicts with saved conversation identities, preserve the original transcript and answer, and record explicit manual target overrides. Fixes #442; thanks @postoso.
+- Browser: fail promptly on known English Retry failures, preserve manual recovery, and keep waiting while generation remains active; apply the same guard to image output and response recovery. Fixes #457; thanks @developerisnow.
+- Gemini: update the web request protocol and model headers, preserve raw image-download fallbacks, report upstream and oversized-header failures clearly, and add an opt-in refusal of model fallback; thanks @mpeter.
+- Browser: bundle multiple source uploads while preserving native attachments and the existing auto format, negotiate deferred fallback bundling with remote hosts, and remove generated files after success, failure, or preparation timeout; thanks @tristanmanchester.
+- Agents: add the optional oracle-advisor skill with explicit API, browser, or render routing and per-run model/effort provenance, while retaining the existing Oracle skill. Fixes #355; thanks @genforAI.
+- Browser: wait for explicit upload state to clear before completing attachments or sending; ignore unrelated activity, hidden indicators, and filenames that resemble status text. Fixes #446; thanks @HJC704.
+- Browser: retain per-file attachment evidence, including filename-less images, and stabilize the send target without replaying a dispatched prompt. Fixes #418; thanks @hubofvalley.
+- Browser: refuse default-tab fallback when an ordinary remote run cannot create or attach its dedicated tab; thanks @ShunmeiCho.
+- **Breaking — Remote:** accept only conversation-scoped client settings; executable paths, profiles, debugging endpoints, cookie selection, existing-tab selection, and other host settings remain controlled by the service host. Thanks @frontierkodiak.
+- Azure: ignore generic base URLs during model-metadata resolution, preventing OpenRouter catalog requests with Azure credentials.
+- Browser: select and verify thinking effort in ChatGPT's direct slider while keeping explicit Pro requests fail-closed. Fixes #422.
+- Browser: recognize Korean picker labels and localized effort-label punctuation, including Japanese, without confusing High, Extra High, or Unicode word continuations. Fixes #423 and #440; thanks @Gabrielgvl and @kiyo-e.
+- Browser: recognize the Japanese 思考量 effort label and Japanese archive controls.
+- Browser: honor the requested thinking time during Deep Research.
+- CLI: inherit browser.remoteChrome from user configuration while preserving explicit endpoints, attach-running destinations, and copy-profile choices; thanks @ShunmeiCho.
+- Browser: attach to running Chrome without DevToolsActivePort metadata, with IPv6 support and bounded endpoint retries. Fixes #414; thanks @devYRPauli.
+- Remote: preserve every attachment when upload basenames collide after sanitization. Fixes #387; thanks @postoso.
+- Browser: recognize collision-renamed attachment chips while keeping filenames, extensions, and Unicode boundaries distinct. Fixes #393; thanks @devYRPauli.
+- Browser: report ChatGPT rate limiting directly instead of presenting the modal's dismissal button as an available model.
+- Browser: retire dead running-session records when only the controller PID is available. Fixes #391; thanks @OfficialAbhinavSingh.
+- Browser: bound prompt preparation by the configured input timeout. Fixes #381.
+- Browser: restore visible macOS Chrome windows to their prior placement only when Oracle recorded that placement before hiding them.
+- CLI: keep dry-run previews free of session side effects.
+- Remote: advertise only addresses on which the service is listening.
+- Release: attach the npm tarball and its checksums to the GitHub Release and verify them before the Homebrew tap updates, so the formula no longer points at a missing asset. Fixes #443.
+- Dependencies: refresh provider SDKs, browser and terminal utilities, schema/query tooling, development dependencies, pnpm, and Pages actions; update OpenAI to 7.10, Google GenAI to 2.21, Inquirer to 14.2.1, Puppeteer to 25.10, Fast URI to 4.1.4, Vitest to 5, and Chrome DevTools protocol to 0.0.1692173 while retaining Node >=24 and the two-day release-age policy.
+
+## 0.18.0 — 2026-08-14
 
 ### Changed
 
 - Browser: stop copying cookies from a live Chrome profile by default because ChatGPT token rotation can invalidate the user's interactive session. Use the persistent `--browser-manual-login` profile (recommended), inline cookies, or explicitly restore the old behavior with `--browser-cookie-sync` / `browser.cookieSync=true`. Fixes #367.
+- Browser: route the generic current-Pro aliases (`gpt-5-pro`, `gpt-5.1-pro`, `gpt-5.2-pro`, and `gpt-5.4-pro`) to GPT-5.6 Sol with Pro effort. Use the explicit `gpt-5.5-pro` model to keep the historical GPT-5.5 target; an explicit thinking-time setting still overrides the alias default. Fixes #373. Thanks @pdurlej!
+
+### Fixed
+
+- Browser: detect a disabled ChatGPT effort tier (e.g. an exhausted Pro allotment) before clicking it, and report the account's own reset notice instead of a misleading "selection unverified" failure. Thanks @enieuwy!
 
 ## 0.17.3 — 2026-08-13
 

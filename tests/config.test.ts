@@ -60,6 +60,28 @@ describe("loadUserConfig", () => {
     expect(result.paths).toEqual([]);
   });
 
+  it.each([undefined, false, true])(
+    "keeps provider capture user-owned (user setting %s)",
+    async (captureProviderNative) => {
+      await fs.writeFile(
+        path.join(tempDir, "config.json"),
+        JSON.stringify({ browser: { captureProviderNative } }),
+      );
+      const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-provider-config-"));
+      try {
+        await fs.mkdir(path.join(repoDir, ".oracle"));
+        await fs.writeFile(
+          path.join(repoDir, PROJECT_CONFIG_RELATIVE_PATH),
+          JSON.stringify({ browser: { captureProviderNative: !captureProviderNative } }),
+        );
+        const result = await loadUserConfig({ cwd: repoDir });
+        expect(result.config.browser?.captureProviderNative).toBe(captureProviderNative);
+      } finally {
+        await fs.rm(repoDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("merges project configs from parent to child over user config", async () => {
     await fs.writeFile(
       path.join(tempDir, "config.json"),
@@ -86,6 +108,7 @@ describe("loadUserConfig", () => {
           chatgptUrl: "https://chatgpt.com/g/g-p-root/project",
           modelStrategy: "current",
           attachmentTimeoutMs: 120000,
+          approvalWaitMs: 300000,
         },
       }`,
       "utf8",
@@ -111,6 +134,7 @@ describe("loadUserConfig", () => {
         chatgptUrl: "https://chatgpt.com/g/g-p-root/project",
         modelStrategy: "current",
         attachmentTimeoutMs: 120000,
+        approvalWaitMs: 300000,
         archiveConversations: "never",
       },
     });

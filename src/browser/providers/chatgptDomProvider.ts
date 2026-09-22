@@ -7,14 +7,17 @@ import { waitForAssistantResponse } from "../actions/assistantResponse.js";
 interface ChatgptDomProviderState {
   runtime: ChromeClient["Runtime"];
   input: ChromeClient["Input"];
+  page?: ChromeClient["Page"];
   logger: BrowserLogger;
   timeoutMs: number;
   inputTimeoutMs?: number;
   attachmentTimeoutMs?: number;
   baselineTurns?: number | null;
   attachmentNames?: AttachmentReadyExpectation[];
+  attachmentNavigationUrl?: string;
   committedTurns?: number | null;
   onPromptSubmitted?: () => Promise<void> | void;
+  webSearch?: boolean;
 }
 
 function requireState(ctx: ProviderDomFlowContext): ChatgptDomProviderState {
@@ -40,11 +43,14 @@ async function submitPromptViaAdapter(ctx: ProviderDomFlowContext): Promise<void
     {
       runtime: state.runtime,
       input: state.input,
+      page: state.page,
       attachmentNames: state.attachmentNames ?? [],
+      attachmentNavigationUrl: state.attachmentNavigationUrl,
       baselineTurns: state.baselineTurns ?? undefined,
       inputTimeoutMs: state.inputTimeoutMs ?? undefined,
       attachmentTimeoutMs: state.attachmentTimeoutMs ?? undefined,
       onPromptSubmitted: state.onPromptSubmitted,
+      webSearch: state.webSearch,
     },
     ctx.prompt,
     state.logger,

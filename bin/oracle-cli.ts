@@ -1,15 +1,8 @@
 #!/usr/bin/env node
 import "dotenv/config";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Command, Option } from "commander";
 import type { OptionValues } from "commander";
-// Allow `npx @steipete/oracle oracle-mcp` to resolve the MCP server even though npx runs the default binary.
-if (process.argv[2] === "oracle-mcp") {
-  const { startMcpServer } = await import("../src/mcp/server.js");
-  await startMcpServer();
-  process.exit(0);
-}
 import { resolveEngine, type EngineMode, defaultWaitPreference } from "../src/cli/engine.js";
 import { shouldRequirePrompt } from "../src/cli/promptRequirement.js";
 import { resolveDashPrompt } from "../src/cli/stdin.js";
@@ -50,8 +43,21 @@ import {
   dedupePathInputs,
 } from "../src/cli/options.js";
 import { copyToClipboard } from "../src/cli/clipboard.js";
+import { isGpt6ProAlias } from "../src/cli/browserConfig.js";
 import { buildMarkdownBundle } from "../src/cli/markdownBundle.js";
-import { shouldDetachSession, stopDetachedWorker } from "../src/cli/detach.js";
+import {
+  detachedCancellationExitCode,
+  shouldDetachSession,
+  shouldExitAfterTopLevelSigint,
+  stopDetachedWorker,
+} from "../src/cli/detach.js";
+import {
+  clearDetachedSessionCancellation,
+  detachedSessionCancellationPath,
+  launchDetachedSession,
+  requestDetachedSessionCancellation,
+  waitForDetachedSessionCancellation,
+} from "../src/cli/detachedSession.js";
 import { applyHiddenAliases } from "../src/cli/hiddenAliases.js";
 import type { BrowserSessionRunnerDeps } from "../src/browser/sessionRunner.js";
 import { isMediaFile } from "../src/browser/prompt.js";
@@ -62,7 +68,7 @@ import { formatRenderedMarkdown } from "../src/cli/renderOutput.js";
 import { resolveRenderFlag, resolveRenderPlain } from "../src/cli/renderFlags.js";
 import { resolveGeminiModelId } from "../src/oracle/geminiModels.js";
 import type { StatusOptions } from "../src/cli/sessionCommand.js";
-import { isErrorLogged } from "../src/cli/errorUtils.js";
+import { formatCliError, isErrorLogged } from "../src/cli/errorUtils.js";
 import { resolveOutputPath } from "../src/cli/writeOutputPath.js";
 import { getCliVersion } from "../src/version.js";
 import {
@@ -85,6 +91,7 @@ import {
   isTraceValueFlag,
 } from "../src/cli/perfTrace.js";
 import { resolveBrowserFollowupReference } from "../src/cli/followup.js";
+import { BrowserRunCancelledError } from "../src/oracle/errors.js";
 
 interface CliOptions extends OptionValues {
   prompt?: string;
@@ -136,6 +143,7 @@ interface CliOptions extends OptionValues {
   browserUrl?: string;
   browserTimeout?: string;
   browserInputTimeout?: string;
+  browserApprovalWait?: string;
   browserAttachmentTimeout?: string;
   browserProfileLockTimeout?: string;
   browserMaxConcurrentTabs?: string;
@@ -154,7 +162,8 @@ interface CliOptions extends OptionValues {
   browserManualLoginProfileDir?: string;
   copyProfile?: string;
   browserThinkingTime?: "light" | "standard" | "extended" | "extra-high" | "pro" | "heavy";
-  browserResearch?: "off" | "deep";
+  browserCaptureProviderNative?: boolean;
+  browserResearch?: "off" | "search" | "deep";
   browserFollowUp?: string[];
   browserAllowCookieErrors?: boolean;
   browserAttachments?: string;
@@ -172,6 +181,7 @@ interface CliOptions extends OptionValues {
   output?: string;
   aspect?: string;
   geminiShowThoughts?: boolean;
+  geminiFallback?: boolean;
   copyMarkdown?: boolean;
   copy?: boolean;
   verbose?: boolean;
@@ -194,6 +204,7 @@ interface CliOptions extends OptionValues {
   showModelId?: boolean;
   retainHours?: number;
   writeOutput?: string;
+  writeArtifacts?: boolean;
   writeOutputPath?: string;
   allowPartial?: boolean;
   partial?: "fail" | "ok";
@@ -442,7 +453,7 @@ program
   .option("-s, --slug <words>", "Custom session slug (3-5 words).")
   .option(
     "-m, --model <model>",
-    "Model to target (gpt-5.5-pro default). GPT-5.6 aliases gpt-5.6 and gpt-5.6-sol work with the OpenAI API or ChatGPT browser. Browser mode also supports current GPT-5.5/GPT-5.4 targets and legacy Pro aliases; retired GPT-5.2 base/Instant/Thinking aliases are API-only. Other API targets include gpt-5.1-codex, gpt-5.2, gpt-5.2-instant, Gemini, Claude, and custom model IDs.",
+    "Model to target (gpt-5.5-pro default). GPT-5.6 aliases gpt-5.6 and gpt-5.6-sol work with the OpenAI API or ChatGPT browser. In browser mode, generic Pro aliases follow the current GPT-5.6 Sol target; use explicit gpt-5.5-pro to pin GPT-5.5. Retired GPT-5.2 base/Instant/Thinking aliases are API-only. Other API targets include gpt-5.1-codex, gpt-5.2, gpt-5.2-instant, Gemini, Claude, and custom model IDs.",
     normalizeModelOption,
   )
   .option(
@@ -462,19 +473,15 @@ program
       .default([]),
   )
   .addOption(
-    new Option("--reasoning-effort <effort>", "Reasoning effort for GPT-5.6 API models.").choices([
-      "none",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]),
+    new Option(
+      "--reasoning-effort <effort>",
+      "Reasoning effort for GPT-6 Astra and GPT-5.6 API models (Astra requires low or higher).",
+    ).choices(["none", "low", "medium", "high", "xhigh", "max"]),
   )
   .addOption(
     new Option(
       "--reasoning-mode <mode>",
-      'Responses API reasoning execution mode for GPT-5.6 models ("standard" or "pro").',
+      'Responses API reasoning execution mode for GPT-6 Astra and GPT-5.6 models ("standard" or "pro").',
     ).choices(["standard", "pro"]),
   )
   .addOption(
@@ -593,6 +600,11 @@ program
     "--write-output <path>",
     "Write only the final assistant message to this file (overwrites; multi-model appends .<model> before the extension).",
   )
+  .option(
+    "--write-artifacts",
+    "Also export captured browser files beside --write-output without overwriting existing files (browser runs only).",
+    false,
+  )
   .option("--allow-partial", "Exit 0 for multi-model runs when at least one model succeeds.", false)
   .addOption(
     new Option("--partial <mode>", "Multi-model failure policy (fail | ok).")
@@ -684,6 +696,12 @@ program
       "--browser-input-timeout <ms|s|m>",
       "Maximum time to wait for the prompt textarea (default 60s).",
     ).hideHelp(),
+  )
+  .addOption(
+    new Option(
+      "--browser-approval-wait <duration>",
+      "Wait for each Chrome remote-debugging approval prompt (default 20s; e.g. 5m).",
+    ).env("ORACLE_BROWSER_APPROVAL_WAIT"),
   )
   .addOption(
     new Option(
@@ -826,9 +844,14 @@ program
   .addOption(
     new Option(
       "--browser-research <mode>",
-      "Browser research mode: deep activates ChatGPT Deep Research.",
-    ).choices(["off", "deep"]),
+      "Browser research mode: search activates Web Search; deep activates Deep Research.",
+    ).choices(["off", "search", "deep"]),
   )
+  .option(
+    "--browser-capture-provider-native",
+    "Save ChatGPT’s full conversation record and independent text digests as private session artifacts (opt-in; includes prior turns).",
+  )
+  .option("--no-browser-capture-provider-native", "Disable provider-native evidence capture.")
   .addOption(
     new Option(
       "--browser-archive <mode>",
@@ -885,13 +908,13 @@ program
   .addOption(
     new Option(
       "--browser-bundle-files",
-      "Bundle all attachments into a single archive before uploading.",
+      "Force one browser upload bundle; auto/zip includes all resolved files. Multi-file text/source uploads already bundle by default (flattened text unless ZIP is selected).",
     ).default(false),
   )
   .addOption(
     new Option(
       "--browser-bundle-format <format>",
-      "Bundle format for browser uploads when files are bundled: auto (default), text, or zip.",
+      "Bundle format for browser uploads: auto (flattened text for text-only, ZIP when raw files are present), text, or zip.",
     )
       .choices(["auto", "text", "zip"])
       .default("auto"),
@@ -928,6 +951,10 @@ program
     ).default(false),
   )
   .option(
+    "--no-gemini-fallback",
+    "Fail if the requested Gemini web model is unavailable instead of using Flash-Lite.",
+  )
+  .option(
     "--retain-hours <hours>",
     "Prune stored sessions older than this many hours before running (set 0 to disable).",
     parseFloatOption,
@@ -947,6 +974,13 @@ program
   .addOption(new Option("--wait").default(undefined))
   .addOption(new Option("--no-wait").default(undefined).hideHelp())
   .showHelpAfterError("(use --help for usage)");
+
+program.on("afterHelp", ({ error }: { error: boolean }) => {
+  if (!error && program.opts<CliOptions>().verbose) {
+    console.log("");
+    printDebugHelp(program.name());
+  }
+});
 
 program.addHelpText(
   "after",
@@ -972,6 +1006,14 @@ program
   .option("--token <value>", "Access token clients must provide (random if omitted).")
   .option("--token-file <path>", "Read the service access token from a file.")
   .option(
+    "--max-concurrent-runs <count>",
+    "Opt into concurrent runs and FIFO queueing; clamped to the host browser tab cap (default remains single-flight HTTP 409).",
+  )
+  .option(
+    "--max-queued-runs <count>",
+    "Waiting requests in opt-in queue mode (default 8; 0 disables waiting).",
+  )
+  .option(
     "--manual-login",
     "Use a dedicated Chrome profile for manual login (recommended when cookie sync is unavailable).",
     false,
@@ -987,11 +1029,22 @@ program
   )
   .action(async (commandOptions) => {
     const { serveRemote } = await import("../src/remote/server.js");
+    const { buildServeBrowserConfig } = await import("../src/cli/serveBrowserConfig.js");
+    const { config } = await loadUserConfig();
     await serveRemote({
+      browserConfig: buildServeBrowserConfig(program.opts<CliOptions>(), config),
       host: commandOptions.host,
       port: commandOptions.port,
       token: commandOptions.token,
       tokenFile: commandOptions.tokenFile,
+      maxConcurrentRuns:
+        commandOptions.maxConcurrentRuns === undefined
+          ? undefined
+          : Number(commandOptions.maxConcurrentRuns),
+      maxQueuedRuns:
+        commandOptions.maxQueuedRuns === undefined
+          ? undefined
+          : Number(commandOptions.maxQueuedRuns),
       manualLoginDefault: commandOptions.manualLogin,
       manualLoginProfileDir: commandOptions.manualLoginProfileDir,
       cookieSyncDefault: commandOptions.browserCookieSync,
@@ -1341,7 +1394,7 @@ program
   .option("--remote-host <host:port>", "Delegate browser runs to a remote `oracle serve` instance.")
   .option("--remote-token <token>", "Access token for the remote `oracle serve` instance.")
   .action(async (sessionId: string, _options: RestartCommandOptions, cmd: Command) => {
-    const restartOptions = cmd.opts<RestartCommandOptions>();
+    const restartOptions = cmd.optsWithGlobals<RestartCommandOptions>();
     await restartSession(sessionId, restartOptions);
   });
 
@@ -1414,11 +1467,17 @@ function buildRunOptions(
     browserBundleFiles: overrides.browserBundleFiles ?? options.browserBundleFiles ?? false,
     browserBundleFormat: overrides.browserBundleFormat ?? options.browserBundleFormat ?? "auto",
     generateImage: overrides.generateImage ?? options.generateImage,
+    youtube: overrides.youtube ?? options.youtube,
+    editImage: overrides.editImage ?? options.editImage,
+    aspectRatio: overrides.aspectRatio ?? options.aspect,
+    geminiShowThoughts: overrides.geminiShowThoughts ?? options.geminiShowThoughts,
+    geminiAllowModelFallback: overrides.geminiAllowModelFallback ?? options.geminiFallback,
     outputPath: overrides.outputPath ?? options.output,
     browserFollowUps: overrides.browserFollowUps ?? options.browserFollowUp ?? [],
     background: overrides.background ?? undefined,
     renderPlain: overrides.renderPlain ?? options.renderPlain ?? false,
     writeOutputPath: overrides.writeOutputPath ?? options.writeOutputPath,
+    writeArtifacts: overrides.writeArtifacts ?? options.writeArtifacts ?? false,
   };
 }
 
@@ -1717,11 +1776,17 @@ function buildRunOptionsFromMetadata(metadata: SessionMetadata): RunOracleOption
     browserBundleFiles: stored.browserBundleFiles,
     browserBundleFormat: stored.browserBundleFormat,
     generateImage: stored.generateImage,
+    youtube: stored.youtube,
+    editImage: stored.editImage,
+    aspectRatio: stored.aspectRatio,
+    geminiShowThoughts: stored.geminiShowThoughts,
+    geminiAllowModelFallback: stored.geminiAllowModelFallback,
     outputPath: stored.outputPath,
     browserFollowUps: stored.browserFollowUps,
     background: stored.background,
     renderPlain: stored.renderPlain,
     writeOutputPath: stored.writeOutputPath,
+    writeArtifacts: stored.writeArtifacts,
   };
 }
 
@@ -1742,7 +1807,6 @@ async function runRootCommand(options: CliOptions): Promise<void> {
     return;
   }
   const userConfig = (await loadUserConfig()).config;
-  const helpRequested = rawCliArgs.some((arg: string) => arg === "--help" || arg === "-h");
   const multiModelProvided = Array.isArray(options.models) && options.models.length > 0;
   const optionUsesDefault = (name: string): boolean => {
     // Commander reports undefined for untouched options, so treat undefined/default the same
@@ -1751,15 +1815,6 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   };
   if (multiModelProvided && !optionUsesDefault("model") && normalizeModelOption(options.model)) {
     throw new Error("--models cannot be combined with --model.");
-  }
-  if (helpRequested) {
-    if (options.verbose) {
-      console.log("");
-      printDebugHelp(program.name());
-      console.log("");
-    }
-    program.help({ error: false });
-    return;
   }
   const previewMode = resolvePreviewMode(options.dryRun || options.preview);
   const mergedFileInputs = mergePathLikeOptions(
@@ -1846,9 +1901,19 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   }
 
   const providerMode = resolveApiProviderMode(options);
-  const engineModels = multiModelProvided
-    ? Array.from(new Set(options.models!.map((entry) => resolveApiModel(entry))))
-    : [resolveApiModel(normalizeModelOption(options.model) || DEFAULT_MODEL)];
+  // Engine discovery must not apply API-only validation to browser aliases.
+  const engineModelInputs = multiModelProvided
+    ? options.models!
+    : [normalizeModelOption(options.model) || DEFAULT_MODEL];
+  const engineModels = Array.from(
+    new Set(
+      engineModelInputs.map((entry) =>
+        isGpt6ProAlias(entry) && !options.route && !options.preflight
+          ? ("gpt-6-pro" as ModelName)
+          : resolveApiModel(entry),
+      ),
+    ),
+  );
   if (options.route || options.preflight) {
     const routeAzureEndpoint = firstNonEmpty(
       options.azureEndpoint,
@@ -1887,8 +1952,10 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   }
 
   const retentionHours = typeof options.retainHours === "number" ? options.retainHours : undefined;
-  await sessionStore.ensureStorage();
-  await pruneOldSessions(retentionHours, (message) => console.log(chalk.dim(message)));
+  if (!previewMode) {
+    await sessionStore.ensureStorage();
+    await pruneOldSessions(retentionHours, (message) => console.log(chalk.dim(message)));
+  }
   if (providerMode === "openai") {
     if (hasExplicitAzureOption(optionUsesDefault)) {
       throw new Error("--provider openai/--no-azure cannot be combined with Azure options.");
@@ -2149,16 +2216,12 @@ async function runRootCommand(options: CliOptions): Promise<void> {
     }
   }
   const activeModel = resolvedOptions.model;
-  let selectedBrowserAccountId: string | undefined;
-  let selectedBrowserAccountCapability: "text" | "image" | undefined;
+  let selectedBrowserProfileKey: string | undefined;
   let selectedProviderReceipt:
     | ReturnType<typeof import("../src/accounts.js").providerReceiptForAccount>
     | undefined;
   if (engine === "browser") {
-    const {
-      resolveBrowserAccount,
-      providerReceiptForAccount,
-    } = await import("../src/accounts.js");
+    const { resolveBrowserAccount, providerReceiptForAccount } = await import("../src/accounts.js");
     const capability = options.generateImage || options.editImage ? "image" : "text";
     const account = resolveBrowserAccount({
       config: userConfig,
@@ -2168,25 +2231,32 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       capability,
     });
     if (account) {
-      if (options.browserManualLoginProfileDir) {
+      if (!remoteHost && options.browserManualLoginProfileDir) {
         throw new Error("--account cannot be combined with --browser-manual-login-profile-dir.");
       }
-      options.browserManualLogin = true;
-      options.browserManualLoginProfileDir = account.profileDir;
-      options.browserManualLoginChromeProfile = account.chromeProfile;
-      selectedBrowserAccountId = account.id;
-      selectedBrowserAccountCapability = capability;
       selectedProviderReceipt = providerReceiptForAccount({
         model: activeModel,
         account,
         capability,
       });
+      selectedBrowserProfileKey = selectedProviderReceipt.profileKey;
+      if (!remoteHost) {
+        options.browserManualLogin = true;
+        options.browserManualLoginProfileDir = account.profileDir;
+        options.browserManualLoginChromeProfile = account.chromeProfile;
+      }
       console.log(
         chalk.dim(
           `Using named ${account.provider} browser profile [redacted] with ${capability} capability.`,
         ),
       );
     }
+  }
+  if (options.writeArtifacts && engine !== "browser") {
+    throw new Error("--write-artifacts requires --engine browser.");
+  }
+  if (options.writeArtifacts && !resolvedOptions.writeOutputPath) {
+    throw new Error("--write-artifacts requires --write-output <path>.");
   }
   if (options.reasoningMode && engine !== "api") {
     throw new Error("--reasoning-mode requires --engine api.");
@@ -2213,19 +2283,17 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       ...options,
       remoteHost: remoteHost ?? undefined,
       model: activeModel,
+      browserRequestedModel: cliModelArg,
       browserModelLabel: resolveBrowserModelLabel(cliModelArg, activeModel),
     });
+    config.modelIsImplicitDefault =
+      optionUsesDefault("model") && !userConfig.model && !options.browserModelLabel;
     return {
       ...config,
       ...(resolvedOptions.browserResumeConversationUrl
         ? { resumeConversationUrl: resolvedOptions.browserResumeConversationUrl }
         : {}),
-      ...(selectedBrowserAccountId
-        ? {
-            accountId: selectedBrowserAccountId,
-            accountCapability: selectedBrowserAccountCapability,
-          }
-        : {}),
+      ...(selectedBrowserProfileKey ? { accountProfileKey: selectedBrowserProfileKey } : {}),
       ...(selectedProviderReceipt ? { providerReceipt: selectedProviderReceipt } : {}),
     };
   })();
@@ -2330,40 +2398,20 @@ async function runRootCommand(options: CliOptions): Promise<void> {
 
   let browserDeps: BrowserSessionRunnerDeps | undefined;
   if (browserConfig && remoteHost) {
-    const { createRemoteBrowserExecutor } = await import("../src/remote/client.js");
+    const { resolveBrowserExecutor } = await import("../src/browser/executor.js");
     browserDeps = {
-      executeBrowser: createRemoteBrowserExecutor({ host: remoteHost, token: remoteToken }),
+      executeBrowser: await resolveBrowserExecutor(
+        { ...resolvedOptions, model: activeModel },
+        { host: remoteHost, token: remoteToken },
+      ),
     };
     console.log(chalk.dim(`Routing browser automation to remote host ${remoteHost}`));
   } else if (browserConfig && activeModel.startsWith("gemini")) {
-    const { createGeminiWebExecutor } = await import("../src/gemini-web/index.js");
-    browserDeps = {
-      executeBrowser: createGeminiWebExecutor({
-        youtube: options.youtube,
-        generateImage: options.generateImage,
-        editImage: options.editImage,
-        outputPath: options.output,
-        aspectRatio: options.aspect,
-        showThoughts: options.geminiShowThoughts,
-      }),
-    };
     console.log(chalk.dim("Using Gemini web client for browser automation"));
     if (browserConfig.modelStrategy && browserConfig.modelStrategy !== "select") {
       console.log(chalk.dim("Browser model strategy is ignored for Gemini web runs."));
     }
-  } else if (
-    browserConfig &&
-    (activeModel.startsWith("claude") || activeModel.startsWith("grok"))
-  ) {
-    const { createProviderWebExecutor } = await import("../src/provider-web/index.js");
-    browserDeps = { executeBrowser: createProviderWebExecutor() };
-    console.log(
-      chalk.dim(
-        `Using ${activeModel.startsWith("claude") ? "Claude" : "Grok"} web browser automation`,
-      ),
-    );
   }
-  const remoteExecutionActive = Boolean(browserDeps);
 
   if (options.dryRun) {
     const baseRunOptions = buildRunOptions(resolvedOptions, {
@@ -2428,12 +2476,6 @@ async function runRootCommand(options: CliOptions): Promise<void> {
       followupModel: resolvedOptions.followupModel,
       browserResumeConversationUrl: resolvedOptions.browserResumeConversationUrl,
       waitPreference,
-      youtube: options.youtube,
-      generateImage: options.generateImage,
-      editImage: options.editImage,
-      outputPath: options.output,
-      aspectRatio: options.aspect,
-      geminiShowThoughts: options.geminiShowThoughts,
     },
     process.cwd(),
     notifications,
@@ -2444,15 +2486,16 @@ async function runRootCommand(options: CliOptions): Promise<void> {
     effectiveModelId: resolvedOptions.effectiveModelId ?? effectiveModelId,
   };
   const disableDetachEnv = process.env.ORACLE_NO_DETACH === "1";
-  const detachAllowed = remoteExecutionActive
-    ? false
-    : shouldDetachSession({
-        engine,
-        model: activeModel,
-        reasoningMode: resolvedOptions.reasoningMode,
-        waitPreference,
-        disableDetachEnv,
-      });
+  const detachAllowed =
+    browserConfig && (remoteHost || activeModel.startsWith("gemini"))
+      ? false
+      : shouldDetachSession({
+          engine,
+          model: activeModel,
+          reasoningMode: resolvedOptions.reasoningMode,
+          waitPreference,
+          disableDetachEnv,
+        });
   let lifecycle = buildSessionLifecycle({
     engine,
     detached: false,
@@ -2460,14 +2503,19 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   });
   const workerPid = !detachAllowed
     ? undefined
-    : await launchDetachedSession(sessionMeta.id, async (pid) => {
-        lifecycle = buildSessionLifecycle({
-          engine,
-          detached: true,
-          workerPid: pid,
-          reattachCommand: `oracle session ${sessionMeta.id}`,
-        });
-        await sessionStore.updateSession(sessionMeta.id, { lifecycle });
+    : await launchDetachedSession({
+        sessionId: sessionMeta.id,
+        cliEntrypoint: CLI_ENTRYPOINT,
+        env: buildDetachedPerfTraceEnv(process.env, perfTraceArgs.value, sessionMeta.id),
+        prepare: async (pid) => {
+          lifecycle = buildSessionLifecycle({
+            engine,
+            detached: true,
+            workerPid: pid,
+            reattachCommand: `oracle session ${sessionMeta.id}`,
+          });
+          await sessionStore.updateSession(sessionMeta.id, { lifecycle });
+        },
       }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.log(
@@ -2583,44 +2631,6 @@ async function runInteractiveSession(
   }
 }
 
-async function launchDetachedSession(
-  sessionId: string,
-  prepare: (pid: number) => Promise<void>,
-): Promise<number> {
-  return new Promise((resolve, reject) => {
-    try {
-      const args = ["--", CLI_ENTRYPOINT, "--exec-session", sessionId];
-      const env = {
-        ...buildDetachedPerfTraceEnv(process.env, perfTraceArgs.value, sessionId),
-        ORACLE_DETACHED_START_GATE: "1",
-      };
-      const child = spawn(process.execPath, args, {
-        detached: true,
-        stdio: ["pipe", "ignore", "ignore"],
-        env,
-      });
-      child.once("error", reject);
-      child.once("spawn", async () => {
-        if (child.pid === undefined) {
-          reject(new Error("Detached session worker started without a process ID."));
-          return;
-        }
-        try {
-          await prepare(child.pid);
-          child.stdin.end("ready\n");
-          child.unref();
-          resolve(child.pid);
-        } catch (error) {
-          child.kill();
-          reject(error);
-        }
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
 async function waitForDetachedStartGate(): Promise<void> {
   if (process.env.ORACLE_DETACHED_START_GATE !== "1") {
     return;
@@ -2638,17 +2648,29 @@ async function waitForDetachedStartGate(): Promise<void> {
 }
 
 async function attachToDetachedSession(sessionId: string, workerPid: number): Promise<void> {
+  const cancellationMarker = sessionStore
+    .getPaths(sessionId)
+    .then((paths) => detachedSessionCancellationPath(paths.dir, workerPid));
   let cancelled = false;
+  let cancellationRequest: Promise<void> | undefined;
   const cancelWorker = (): void => {
     cancelled = true;
-    try {
-      stopDetachedWorker(workerPid);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(chalk.red(`Unable to stop detached worker ${workerPid}: ${message}`));
-    }
+    cancellationRequest ??= cancellationMarker
+      .then((markerPath) => requestDetachedSessionCancellation(markerPath))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(
+          chalk.red(`Unable to request cancellation from worker ${workerPid}: ${message}`),
+        );
+        try {
+          stopDetachedWorker(workerPid);
+        } catch (stopError) {
+          const stopMessage = stopError instanceof Error ? stopError.message : String(stopError);
+          console.error(chalk.red(`Unable to stop detached worker ${workerPid}: ${stopMessage}`));
+        }
+      });
   };
-  process.once("SIGINT", cancelWorker);
+  process.on("SIGINT", cancelWorker);
   try {
     const { attachSession } = await import("../src/cli/sessionDisplay.js");
     await attachSession(sessionId, {
@@ -2658,9 +2680,17 @@ async function attachToDetachedSession(sessionId: string, workerPid: number): Pr
     });
   } finally {
     process.off("SIGINT", cancelWorker);
-    if (cancelled) {
-      process.exitCode = 130;
+    await cancellationRequest;
+    const finalStatus = (await sessionStore.readSession(sessionId).catch(() => null))?.status;
+    if (
+      cancellationRequest &&
+      finalStatus &&
+      ["completed", "partial", "cancelled", "error"].includes(finalStatus)
+    ) {
+      // The parent may publish its request after the worker's final cleanup.
+      await clearDetachedSessionCancellation(await cancellationMarker);
     }
+    process.exitCode = detachedCancellationExitCode(cancelled, finalStatus, process.exitCode);
   }
 }
 
@@ -2737,40 +2767,20 @@ async function restartSession(sessionId: string, options: RestartCommandOptions)
 
   let browserDeps: BrowserSessionRunnerDeps | undefined;
   if (browserConfig && remoteHost) {
-    const { createRemoteBrowserExecutor } = await import("../src/remote/client.js");
+    const { resolveBrowserExecutor } = await import("../src/browser/executor.js");
     browserDeps = {
-      executeBrowser: createRemoteBrowserExecutor({ host: remoteHost, token: remoteToken }),
+      executeBrowser: await resolveBrowserExecutor(runOptions, {
+        host: remoteHost,
+        token: remoteToken,
+      }),
     };
     console.log(chalk.dim(`Routing browser automation to remote host ${remoteHost}`));
   } else if (browserConfig && runOptions.model.startsWith("gemini")) {
-    const { createGeminiWebExecutor } = await import("../src/gemini-web/index.js");
-    browserDeps = {
-      executeBrowser: createGeminiWebExecutor({
-        youtube: storedOptions.youtube,
-        generateImage: storedOptions.generateImage,
-        editImage: storedOptions.editImage,
-        outputPath: storedOptions.outputPath,
-        aspectRatio: storedOptions.aspectRatio,
-        showThoughts: storedOptions.geminiShowThoughts,
-      }),
-    };
     console.log(chalk.dim("Using Gemini web client for browser automation"));
     if (browserConfig.modelStrategy && browserConfig.modelStrategy !== "select") {
       console.log(chalk.dim("Browser model strategy is ignored for Gemini web runs."));
     }
-  } else if (
-    browserConfig &&
-    (runOptions.model.startsWith("claude") || runOptions.model.startsWith("grok"))
-  ) {
-    const { createProviderWebExecutor } = await import("../src/provider-web/index.js");
-    browserDeps = { executeBrowser: createProviderWebExecutor() };
-    console.log(
-      chalk.dim(
-        `Using ${runOptions.model.startsWith("claude") ? "Claude" : "Grok"} web browser automation`,
-      ),
-    );
   }
-  const remoteExecutionActive = Boolean(browserDeps);
 
   if (sessionMode === "api") {
     validateApiProviderRoutingForCli(runOptions);
@@ -2790,12 +2800,6 @@ async function restartSession(sessionId: string, options: RestartCommandOptions)
       followupSessionId: storedOptions.followupSessionId,
       followupModel: storedOptions.followupModel,
       waitPreference,
-      youtube: storedOptions.youtube,
-      generateImage: storedOptions.generateImage,
-      editImage: storedOptions.editImage,
-      outputPath: storedOptions.outputPath,
-      aspectRatio: storedOptions.aspectRatio,
-      geminiShowThoughts: storedOptions.geminiShowThoughts,
     },
     cwd,
     notifications,
@@ -2809,15 +2813,16 @@ async function restartSession(sessionId: string, options: RestartCommandOptions)
   };
 
   const disableDetachEnv = process.env.ORACLE_NO_DETACH === "1";
-  const detachAllowed = remoteExecutionActive
-    ? false
-    : shouldDetachSession({
-        engine,
-        model: runOptions.model,
-        reasoningMode: runOptions.reasoningMode,
-        waitPreference,
-        disableDetachEnv,
-      });
+  const detachAllowed =
+    browserConfig && (remoteHost || runOptions.model.startsWith("gemini"))
+      ? false
+      : shouldDetachSession({
+          engine,
+          model: runOptions.model,
+          reasoningMode: runOptions.reasoningMode,
+          waitPreference,
+          disableDetachEnv,
+        });
   let lifecycle = buildSessionLifecycle({
     engine,
     detached: false,
@@ -2825,14 +2830,19 @@ async function restartSession(sessionId: string, options: RestartCommandOptions)
   });
   const workerPid = !detachAllowed
     ? undefined
-    : await launchDetachedSession(sessionMeta.id, async (pid) => {
-        lifecycle = buildSessionLifecycle({
-          engine,
-          detached: true,
-          workerPid: pid,
-          reattachCommand: `oracle session ${sessionMeta.id}`,
-        });
-        await sessionStore.updateSession(sessionMeta.id, { lifecycle });
+    : await launchDetachedSession({
+        sessionId: sessionMeta.id,
+        cliEntrypoint: CLI_ENTRYPOINT,
+        env: buildDetachedPerfTraceEnv(process.env, perfTraceArgs.value, sessionMeta.id),
+        prepare: async (pid) => {
+          lifecycle = buildSessionLifecycle({
+            engine,
+            detached: true,
+            workerPid: pid,
+            reattachCommand: `oracle session ${sessionMeta.id}`,
+          });
+          await sessionStore.updateSession(sessionMeta.id, { lifecycle });
+        },
       }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.log(
@@ -2885,6 +2895,10 @@ async function restartSession(sessionId: string, options: RestartCommandOptions)
 async function executeSession(sessionId: string) {
   let metadata: SessionMetadata | null = null;
   let writer: ReturnType<typeof sessionStore.createLogWriter> | null = null;
+  const cancellation = new AbortController();
+  const stopCancellationMonitor = new AbortController();
+  let cancellationMarker: string | undefined;
+  let cancellationMonitor: Promise<void> | undefined;
   try {
     metadata = await sessionStore.readSession(sessionId);
     if (!metadata) {
@@ -2900,6 +2914,18 @@ async function executeSession(sessionId: string) {
     const sessionMode = getSessionMode(metadata);
     const browserConfig = getBrowserConfigFromMetadata(metadata);
     writer = sessionStore.createLogWriter(sessionId);
+    if (sessionMode === "browser") {
+      const paths = await sessionStore.getPaths(sessionId);
+      cancellationMarker = detachedSessionCancellationPath(paths.dir, process.pid);
+      cancellationMonitor = waitForDetachedSessionCancellation({
+        markerPath: cancellationMarker,
+        signal: stopCancellationMonitor.signal,
+      }).then((requested) => {
+        if (requested) {
+          cancellation.abort(new BrowserRunCancelledError("Browser run cancelled by the user."));
+        }
+      });
+    }
     const userConfig = (await loadUserConfig()).config;
     const notifications = deriveNotificationSettingsFromMetadata(
       metadata,
@@ -2917,17 +2943,19 @@ async function executeSession(sessionId: string) {
       write: writer.writeChunk,
       version: VERSION,
       notifications,
+      signal: sessionMode === "browser" ? cancellation.signal : undefined,
     });
   } catch (error) {
-    process.exitCode = 1;
+    const cancelled = error instanceof BrowserRunCancelledError;
+    process.exitCode = cancelled ? 130 : 1;
     const message = error instanceof Error ? error.message : String(error);
     if (!metadata) {
-      console.error(chalk.red(message));
+      if (!cancelled) console.error(chalk.red(message));
       return;
     }
-    writer?.logLine(`ERROR: Detached session worker failed: ${message}`);
+    if (!cancelled) writer?.logLine(`ERROR: Detached session worker failed: ${message}`);
     const latest = await sessionStore.readSession(sessionId).catch(() => null);
-    if (latest && !["completed", "partial", "error"].includes(latest.status)) {
+    if (latest && !["completed", "partial", "error", "cancelled"].includes(latest.status)) {
       await sessionStore.updateSession(sessionId, {
         status: "error",
         completedAt: new Date().toISOString(),
@@ -2940,6 +2968,14 @@ async function executeSession(sessionId: string) {
       });
     }
   } finally {
+    stopCancellationMonitor.abort();
+    await cancellationMonitor?.catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      writer?.logLine(`ERROR: Detached cancellation monitor failed: ${message}`);
+    });
+    if (cancellationMarker) {
+      await clearDetachedSessionCancellation(cancellationMarker).catch(() => undefined);
+    }
     writer?.stream.end();
   }
 }
@@ -3065,6 +3101,12 @@ program.action(async function (this: Command) {
 });
 
 async function main(): Promise<void> {
+  // npx runs the default binary; let the MCP transport own the alias lifetime.
+  if (process.argv[2] === "oracle-mcp") {
+    const { startMcpServer } = await import("../src/mcp/server.js");
+    await startMcpServer();
+    return;
+  }
   if (perfTraceArgs.error) {
     console.error(`error: ${perfTraceArgs.error}`);
     console.error("(use --help for usage)");
@@ -3075,7 +3117,7 @@ async function main(): Promise<void> {
     console.log(chalk.yellow("\nCancelled."));
     process.exitCode = 130;
     // Browser/serve modes install their own SIGINT cleanup after this top-level handler.
-    if (process.listenerCount("SIGINT") <= 1) {
+    if (shouldExitAfterTopLevelSigint(process.listenerCount("SIGINT"))) {
       process.exit(130);
     }
   };
@@ -3088,12 +3130,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  if (error instanceof Error) {
-    if (!isErrorLogged(error)) {
-      console.error(chalk.red("✖"), error.message);
-    }
-  } else {
-    console.error(chalk.red("✖"), error);
-  }
+  if (!isErrorLogged(error)) console.error(chalk.red("✖"), formatCliError(error));
   process.exitCode = 1;
 });
