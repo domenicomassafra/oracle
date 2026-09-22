@@ -70,6 +70,9 @@ importers:
       osc-progress:
         specifier: ^0.3.3
         version: 0.3.4
+      puppeteer-core:
+        specifier: ^25.11.0
+        version: 25.11.0
       qs:
         specifier: ^6.16.0
         version: 6.16.0
@@ -119,9 +122,6 @@ importers:
       oxlint:
         specifier: ^1.82.0
         version: 1.83.0
-      puppeteer-core:
-        specifier: ^25.10.0
-        version: 25.11.0
       tsx:
         specifier: ^4.23.13
         version: 4.23.13

@@ -75,6 +75,7 @@
     "markdansi": "0.3.4",
     "openai": "^7.20.0",
     "osc-progress": "^0.3.3",
+    "puppeteer-core": "^25.11.0",
     "qs": "^6.16.0",
     "shiki": "^4.4.3",
     "toasted-notifier": "^10.1.0",
@@ -93,7 +94,6 @@
     "esbuild": "^0.28.2",
     "oxfmt": "0.68.0",
     "oxlint": "^1.82.0",
-    "puppeteer-core": "^25.10.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "5.0.1"

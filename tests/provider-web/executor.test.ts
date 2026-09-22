@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { resolveProviderWebTarget } from "../../src/provider-web/executor.js";
 
 describe("resolveProviderWebTarget", () => {
@@ -12,5 +14,13 @@ describe("resolveProviderWebTarget", () => {
 
   test("rejects unsupported providers", () => {
     expect(() => resolveProviderWebTarget("llama")).toThrow(/Unsupported provider web model/);
+  });
+
+  test("ships puppeteer-core as a runtime dependency", () => {
+    const packageJson = JSON.parse(
+      readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    expect(packageJson.dependencies?.["puppeteer-core"]).toBeTruthy();
+    expect(packageJson.devDependencies?.["puppeteer-core"]).toBeUndefined();
   });
 });
