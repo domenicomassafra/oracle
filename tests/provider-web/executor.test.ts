@@ -1,9 +1,37 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { resolveProviderWebTarget } from "../../src/provider-web/executor.js";
+import {
+  CLAUDE_COMPOSER_SELECTOR,
+  GROK_COMPOSER_SELECTOR,
+  resolveProviderWebTarget,
+} from "../../src/provider-web/executor.js";
+import { FakeDocument, FakeElement } from "../browser/domFixture.js";
 
 describe("resolveProviderWebTarget", () => {
+  test("finds the Italian Grok editor by its stable combobox role", () => {
+    const document = new FakeDocument([
+      new FakeElement("div", {
+        contenteditable: "true",
+        role: "combobox",
+        "aria-label": "Chiedi a Grok qualsiasi cosa",
+      }),
+    ]);
+    expect(document.querySelector(GROK_COMPOSER_SELECTOR)).not.toBeNull();
+  });
+
+  test("finds the Italian Claude editor by its stable test id", () => {
+    const document = new FakeDocument([
+      new FakeElement("div", {
+        contenteditable: "true",
+        role: "textbox",
+        "data-testid": "chat-input",
+        "aria-label": "Scrivi il tuo prompt per Claude",
+      }),
+    ]);
+    expect(document.querySelector(CLAUDE_COMPOSER_SELECTOR)).not.toBeNull();
+  });
+
   test.each([
     ["claude-sonnet-5", "claude", "Sonnet 5"],
     ["claude-haiku-4.5", "claude", "Haiku 4.5"],

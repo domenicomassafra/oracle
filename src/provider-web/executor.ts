@@ -10,6 +10,10 @@ type Provider = "claude" | "grok";
 const CLAUDE_URL = "https://claude.ai/new";
 const GROK_URL = "https://grok.com/?q=&reasoningMode=none&voice=false";
 
+// Stable DOM attributes survive Italian/English browser-localized composer labels.
+export const CLAUDE_COMPOSER_SELECTOR = '[contenteditable="true"][data-testid="chat-input"]';
+export const GROK_COMPOSER_SELECTOR = '[contenteditable="true"][role="combobox"]';
+
 export function resolveProviderWebTarget(model: string): {
   provider: Provider;
   url: string;
@@ -120,29 +124,15 @@ async function selectClaudeModel(page: Page, label: string): Promise<string> {
   return active.replace(/^(model|modello):\s*/i, "");
 }
 
-async function waitForComposer(page: Page, labelPattern: RegExp, timeout = 30_000): Promise<void> {
-  const source = labelPattern.source;
-  const flags = labelPattern.flags;
-  await page.waitForFunction(
-    (pattern) => {
-      const [needle, needleFlags] = pattern as unknown as [string, string];
-      return Array.from(document.querySelectorAll('[contenteditable="true"]')).some((candidate) =>
-        new RegExp(needle, needleFlags).test(candidate.getAttribute("aria-label") ?? ""),
-      );
-    },
-    { timeout },
-    [source, flags],
-  );
+async function waitForComposer(page: Page, selector: string, timeout = 30_000): Promise<void> {
+  await page.waitForSelector(selector, { timeout });
 }
 
 async function submitClaude(page: Page, prompt: string): Promise<string> {
-  await waitForComposer(page, /prompt.*claude|claude.*prompt/i);
+  await waitForComposer(page, CLAUDE_COMPOSER_SELECTOR);
   const initialCount = await page.$$eval(".font-claude-response", (nodes) => nodes.length);
-  const typed = await page.evaluate((value) => {
-    const editor = Array.from(document.querySelectorAll('[contenteditable="true"]')).find(
-      (candidate) =>
-        /prompt.*claude|claude.*prompt/i.test(candidate.getAttribute("aria-label") ?? ""),
-    );
+  const typed = await page.evaluate(({ value, selector }) => {
+    const editor = document.querySelector(selector);
     if (!(editor instanceof HTMLElement)) return false;
     editor.focus();
     document.execCommand("selectAll");
@@ -153,7 +143,7 @@ async function submitClaude(page: Page, prompt: string): Promise<string> {
     // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
     // length equality is unreliable for long prompts; any real content is enough.
     return (editor.textContent?.trim().length ?? 0) > 0;
-  }, prompt);
+  }, { value: prompt, selector: CLAUDE_COMPOSER_SELECTOR });
   if (!typed) throw new Error("Claude prompt composer is not ready.");
   await page.keyboard.press("Enter");
   await page.waitForFunction(
@@ -176,17 +166,15 @@ async function submitClaude(page: Page, prompt: string): Promise<string> {
 async function submitGrok(page: Page, prompt: string): Promise<string> {
   await closeGrokOverlays(page);
   // A fresh tab takes seconds to hydrate the SPA composer; never race it with a fixed sleep.
-  await waitForComposer(page, /ask grok/i);
+  await waitForComposer(page, GROK_COMPOSER_SELECTOR);
   // Cookie dialogs hydrate asynchronously after the composer; dismiss them again before typing.
   await closeGrokOverlays(page);
   const initialCount = await page.$$eval(
     '[data-testid="assistant-message"]',
     (nodes) => nodes.length,
   );
-  const typed = await page.evaluate((value) => {
-    const editor = Array.from(document.querySelectorAll('[contenteditable="true"]')).find(
-      (candidate) => /ask grok/i.test(candidate.getAttribute("aria-label") ?? ""),
-    );
+  const typed = await page.evaluate(({ value, selector }) => {
+    const editor = document.querySelector(selector);
     if (!(editor instanceof HTMLElement)) return false;
     editor.focus();
     document.execCommand("selectAll");
@@ -197,7 +185,7 @@ async function submitGrok(page: Page, prompt: string): Promise<string> {
     // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
     // length equality is unreliable for long prompts; any real content is enough.
     return (editor.textContent?.trim().length ?? 0) > 0;
-  }, prompt);
+  }, { value: prompt, selector: GROK_COMPOSER_SELECTOR });
   if (!typed) throw new Error("Grok prompt composer is not ready.");
   await new Promise((resolve) => setTimeout(resolve, 300));
   const sent = await page.evaluate(() => {
