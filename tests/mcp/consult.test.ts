@@ -381,10 +381,24 @@ describe("summarizeModelRunsForConsult", () => {
     },
   );
 
-  test("selects Latest through MCP including explicit strategy overrides", () => {
+  // MCP sessions record the no-focus setting they ran with; the default is off.
+  test.each([
+    { browser: {}, expected: false },
+    { browser: { noFocus: false }, expected: false },
+    { browser: { noFocus: true }, expected: true },
+  ])("records the resolved no-focus setting for config $browser", ({ browser, expected }) => {
+    const config = buildConsultBrowserConfig({
+      userConfig: { browser },
+      env: {},
+      runModel: "gpt-5.5",
+    });
+    expect(JSON.parse(JSON.stringify(config)).noFocus).toBe(expected);
+  });
+
+  test("selects GPT-6 through MCP including explicit strategy overrides", () => {
     expect(
       buildConsultBrowserConfig({ userConfig: {}, env: {}, runModel: "gpt-6-astra" }),
-    ).toMatchObject({ desiredModel: "Latest" });
+    ).toMatchObject({ desiredModel: "GPT-6" });
     expect(
       buildConsultBrowserConfig({
         userConfig: { browser: { modelStrategy: "current" } },
@@ -392,8 +406,25 @@ describe("summarizeModelRunsForConsult", () => {
         runModel: "gpt-6-astra",
         browserModelStrategy: "select",
       }),
-    ).toMatchObject({ desiredModel: "Latest", modelStrategy: "select" });
+    ).toMatchObject({ desiredModel: "GPT-6", modelStrategy: "select" });
   });
+
+  test.each(["GPT-6", "GPT-6 Pro"])(
+    "resolves explicit MCP GPT-6 Pro independently of label %s",
+    (browserModelLabel) => {
+      expect(
+        buildConsultBrowserConfig({
+          userConfig: {},
+          env: {},
+          runModel: "gpt-6-pro",
+          inputModel: "gpt-6-pro",
+          browserModelLabel,
+          browserThinkingTime: "heavy",
+          browserModelStrategy: "select",
+        }),
+      ).toMatchObject({ desiredModel: "GPT-6", thinkingTime: "heavy", modelStrategy: "select" });
+    },
+  );
 
   test("marks only omitted MCP models as implicit defaults", () => {
     const base = { userConfig: {}, env: {}, runModel: "gpt-5.5-pro" };
@@ -510,7 +541,7 @@ describe("summarizeModelRunsForConsult", () => {
     });
 
     expect(config).toMatchObject({
-      desiredModel: "Latest",
+      desiredModel: "GPT-6",
       thinkingTime: "pro",
     });
   });

@@ -235,7 +235,7 @@ export async function waitForResearchPlanAutoConfirm(
     // ChatGPT projects, attachments, and other tools also render large iframes.
     const { result } = await Runtime.evaluate({
       expression: `(() => {
-        const turns = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+        const turns = Array.from(document.querySelectorAll(':is([data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"])'));
         const assistantText = String(turns.at(-1)?.textContent || '').toLowerCase();
         const hasResearchText = assistantText.includes('researching') ||
           assistantText.includes('research plan') ||
@@ -375,6 +375,12 @@ export async function waitForDeepResearchCompletion(
             client,
             ignoredTargetKeys,
             requireScopedTargetOwner ? minTurnLiteral : -1,
+            {
+              // Reattach sets the owner flag even when the turn index could not
+              // be read. -1 would skip the owner filter and accept any finished
+              // iframe, including a report from another run.
+              rejectCompletedWhenOwnerUnknown: requireScopedTargetOwner && minTurnLiteral < 0,
+            },
           ).catch(() => null)
         )?.read ?? null)
       : null;
@@ -665,6 +671,9 @@ async function readDeepResearchTargetResult(
   client: ChromeClient,
   ignoredTargetKeys: ReadonlySet<string> = new Set(),
   minTurnIndex = -1,
+  options?: {
+    rejectCompletedWhenOwnerUnknown?: boolean;
+  },
 ): Promise<DeepResearchTargetScanResult | null> {
   const rawClient = client as ChromeClient & {
     send?: (
@@ -777,6 +786,13 @@ async function readDeepResearchTargetResult(
         }
       }
       const value = sessionResult.read;
+      if (
+        options?.rejectCompletedWhenOwnerUnknown === true &&
+        minTurnIndex < 0 &&
+        value?.completed
+      ) {
+        continue;
+      }
       if (value?.completed) {
         completed = value;
       } else if (value && (value.inProgress || value.textLength > 0)) {
@@ -1179,7 +1195,7 @@ function buildDeepResearchStatusExpression(): string {
       const rect = f.getBoundingClientRect();
       return rect.width > 200 && rect.height > 200;
     });
-    const turns = document.querySelectorAll('[data-message-author-role="assistant"]');
+    const turns = document.querySelectorAll(':is([data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"])');
     const lastTurn = turns[turns.length - 1];
     const finished = Boolean(lastTurn?.querySelector?.(${finishedSelector}));
     const text = (lastTurn?.textContent || '').trim();
@@ -1208,14 +1224,14 @@ function buildDeepResearchCompletionPollExpression(minTurnIndex: number): string
       pageText.includes('secure your account') &&
       pageText.includes('regain access');
     const isAssistantTurn = (node) => {
-      const attr = String(node.getAttribute('data-message-author-role') || node.getAttribute('data-turn') || node.dataset?.turn || '').toLowerCase();
+      const attr = String(node.getAttribute('data-message-author-role') || (node.getAttribute?.('data-content-search-unit-key') || node.getAttribute?.('data-chatgpt-search-unit-key'))?.split(':').at(-1) || node.getAttribute('data-turn') || node.dataset?.turn || '').toLowerCase();
       return attr === 'assistant' ||
-        Boolean(node.querySelector('[data-message-author-role="assistant"], [data-turn="assistant"]')) ||
+        Boolean(node.querySelector(':is([data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]), [data-turn="assistant"]')) ||
         String(node.getAttribute('data-testid') || '').toLowerCase().includes('conversation-turn') &&
           /chatgpt\\s+said/i.test(node.innerText || node.textContent || '');
     };
     const conversationTurns = ${buildConversationTurnListExpression()};
-    const allAssistantTurns = Array.from(document.querySelectorAll('[data-message-author-role="assistant"], [data-turn="assistant"]'));
+    const allAssistantTurns = Array.from(document.querySelectorAll(':is([data-message-author-role="assistant"], [data-content-search-unit-key$=":assistant"], [data-chatgpt-search-unit-key$=":assistant"]), [data-turn="assistant"]'));
     const scopedTurns = scopedToNewTurns
       ? conversationTurns.slice(MIN_TURN_INDEX).filter(isAssistantTurn)
       : allAssistantTurns;
@@ -1241,9 +1257,12 @@ function buildDeepResearchCompletionPollExpression(minTurnIndex: number): string
       (text.trimStart().startsWith('<system-reminder>') &&
         /<system-reminder>[\\s\\S]*#\\s*plan mode\\b/i.test(text)) ||
       tailIsPlanningPanel;
+    // Copy, rate, and share controls can render on the first tokens. Stop
+    // still means this report is being written.
     const finished = Boolean(lastTurn?.querySelector(${finishedSelector})) &&
       textLength >= 40 &&
-      !incompleteResult;
+      !incompleteResult &&
+      !stopVisible;
     const hasIframe = Array.from(document.querySelectorAll('iframe')).some(f => {
       const rect = f.getBoundingClientRect();
       return rect.width > 200 && rect.height > 200;

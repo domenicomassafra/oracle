@@ -256,6 +256,7 @@ const waitUntil = async (predicate, label, timeout = 30000) => {
     assert.ok(!failure, failure?.output);
     await pause(100);
   }
+  for (const run of runs) console.error(`[${run.name} controller]\n${run.output}`);
   throw new Error(`Timed out: ${label}`);
 };
 const readRegistry = async () =>
@@ -362,7 +363,8 @@ try {
       }
     },
     "final Chrome exit",
-    5000,
+    // Windows profile flushing can outlast five seconds; retain the bounded lifecycle deadline.
+    30000,
   );
   await assert.rejects(
     fetch(`http://127.0.0.1:${chromePort}/json/version`, { signal: AbortSignal.timeout(1000) }),

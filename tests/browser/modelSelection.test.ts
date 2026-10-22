@@ -16,9 +16,27 @@ const evaluateImmediateModelSelectionExpression = (
   buttonLabel: string,
   composerLabel = "",
   proPillLabel = "",
+  modernCheckedModel?: string,
 ): unknown => {
   const expression = buildModelSelectionExpressionForTest(targetModel);
-  const modelButton = { textContent: buttonLabel };
+  const modelButton = {
+    textContent: modernCheckedModel ? `Thinking effortThinking effort${buttonLabel}` : buttonLabel,
+    innerText: buttonLabel,
+    id: modernCheckedModel ? "current-model-trigger" : "",
+  };
+  const currentRadio = modernCheckedModel ? { textContent: modernCheckedModel } : null;
+  const currentMenu = modernCheckedModel
+    ? {
+        getAttribute: (name: string) => (name === "aria-labelledby" ? modelButton.id : null),
+        querySelector: (selector: string) => {
+          if (selector === "[data-model-picker-view]") return {};
+          if (selector.includes('[data-model-picker-view] [role="menuitemradio"]')) {
+            return currentRadio;
+          }
+          return null;
+        },
+      }
+    : null;
   const composerSignal = composerLabel ? { textContent: composerLabel } : null;
   const proPill = proPillLabel
     ? {
@@ -40,7 +58,8 @@ const evaluateImmediateModelSelectionExpression = (
       }
       return null;
     },
-    querySelectorAll: () => (proPill ? [proPill] : []),
+    querySelectorAll: (selector: string) =>
+      currentMenu && selector.includes('[role="menu"]') ? [currentMenu] : proPill ? [proPill] : [],
     title: "",
     body: { innerText: "" },
   };
@@ -1331,45 +1350,105 @@ describe("browser model selection matchers", () => {
     ).toEqual({ status: "already-selected", label: "GPT-5.6 Sol" });
   });
 
-  it("accepts a GPT-6 composer pill as the selected Latest model", () => {
-    expect(evaluateImmediateModelSelectionExpression("Latest", "6 Pro")).toEqual({
+  it.each(["6 Sol", "GPT 6 Preview", "GPT-6 Sol", "6 Mini", "6.1 Pro", "60 Pro"])(
+    "does not accept the %s pill as GPT-6 evidence",
+    (pill) => {
+      expect(evaluateImmediateModelSelectionExpression("GPT-6", pill)).toBeInstanceOf(Promise);
+    },
+  );
+
+  it.each(["GPT-6", "Latest"])("accepts a GPT-6 composer pill for target %s", (target) => {
+    expect(evaluateImmediateModelSelectionExpression(target, "6 Pro")).toEqual({
+      status: "already-selected",
+      label: "GPT-6",
+    });
+  });
+
+  it("verifies the current hidden-measurement picker from its checked Latest radio", () => {
+    expect(evaluateImmediateModelSelectionExpression("GPT-6", "Pro", "", "", "Latest")).toEqual({
       status: "already-selected",
       label: "Latest",
     });
   });
 
-  it("does not report Latest as selected while GPT-5.6 Sol is the active model", () => {
-    expect(evaluateImmediateModelSelectionExpression("Latest", "5.6 Pro")).toBeInstanceOf(Promise);
-    expect(evaluateImmediateModelSelectionExpression("Latest", "GPT-5.6 Sol")).toBeInstanceOf(
+  it.each(["GPT-6", "Latest"])(
+    "verifies the GPT-6 radio for target %s with an effort-only pill",
+    (target) => {
+      expect(evaluateImmediateModelSelectionExpression(target, "Pro", "", "", "GPT-6")).toEqual({
+        status: "already-selected",
+        label: "GPT-6",
+      });
+    },
+  );
+
+  it("switches to the renamed GPT-6 radio and preserves the observed label", async () => {
+    await expect(
+      evaluateMenuModelSelectionExpression("GPT-6", [
+        { label: "GPT-5.6 Sol" },
+        { label: "GPT-6", selectedButtonLabel: "6 Pro" },
+      ]),
+    ).resolves.toMatchObject({ status: "switched", label: "GPT-6" });
+    expect(() => assertResolvedModelSelectionForTest("GPT-6", "GPT-6")).not.toThrow();
+  });
+
+  it.each(["Latest", "最新", "최신"])(
+    "prefers GPT-6 when the legacy %s radio is also present",
+    async (label) => {
+      await expect(
+        evaluateMenuModelSelectionExpression("GPT-6", [
+          { label, selectedButtonLabel: "6 Pro" },
+          { label: "GPT-6", selectedButtonLabel: "6 Pro" },
+        ]),
+      ).resolves.toMatchObject({ status: "switched", label: "GPT-6" });
+    },
+  );
+
+  it.each(["GPT-5.6 Sol", "GPT-6 Sol", "GPT-6.1", "GPT-60", "GPT-6 Preview"])(
+    "rejects %s as evidence for GPT-6",
+    async (label) => {
+      await expect(evaluateMenuModelSelectionExpression("GPT-6", { label })).resolves.toMatchObject(
+        {
+          status: "option-not-found",
+        },
+      );
+      expect(() => assertResolvedModelSelectionForTest("GPT-6", label)).toThrow(
+        /requires GPT-6 Astra/,
+      );
+    },
+  );
+
+  it("does not report GPT-6 as selected while GPT-5.6 Sol is the active model", () => {
+    expect(evaluateImmediateModelSelectionExpression("GPT-6", "5.6 Pro")).toBeInstanceOf(Promise);
+    expect(evaluateImmediateModelSelectionExpression("GPT-6", "GPT-5.6 Sol")).toBeInstanceOf(
       Promise,
     );
   });
 
-  it.each(["最新", "최신"])(
-    "matches the exact localized Latest radio %s without accepting GPT-5.6 Sol",
+  it.each(["Latest", "最新", "최신"])(
+    "accepts the legacy %s radio when GPT-6 is absent",
     async (label) => {
-      const { labelTokens } = buildModelMatchersLiteralForTest("Latest");
-      expect(labelTokens).toContain(label);
+      const { labelTokens } = buildModelMatchersLiteralForTest("GPT-6");
+      expect(labelTokens).toContain(label.toLowerCase());
       await expect(
-        evaluateMenuModelSelectionExpression("Latest", {
+        evaluateMenuModelSelectionExpression("GPT-6", {
           label,
           selectedButtonLabel: "6 Pro",
         }),
       ).resolves.toMatchObject({ status: "switched", label });
       await expect(
-        evaluateMenuModelSelectionExpression("Latest", { label: "GPT-5.6 Sol" }),
+        evaluateMenuModelSelectionExpression("GPT-6", { label: "GPT-5.6 Sol" }),
       ).resolves.toMatchObject({ status: "option-not-found" });
     },
   );
 
-  it("accepts only exact localized Latest evidence after selection", () => {
-    expect(() => assertResolvedModelSelectionForTest("Latest", "最新")).not.toThrow();
-    expect(() => assertResolvedModelSelectionForTest("Latest", "최신")).not.toThrow();
-    expect(() => assertResolvedModelSelectionForTest("Latest", "최신 아님")).toThrow(
+  it("accepts only exact legacy labels after GPT-6 selection", () => {
+    expect(() => assertResolvedModelSelectionForTest("GPT-6", "最新")).not.toThrow();
+    expect(() => assertResolvedModelSelectionForTest("GPT-6", "최신")).not.toThrow();
+    expect(() => assertResolvedModelSelectionForTest("GPT-6", "최신 아님")).toThrow(
       /requires GPT-6 Astra/,
     );
-    expect(() => assertResolvedModelSelectionForTest("Latest", "Latest")).not.toThrow();
-    expect(() => assertResolvedModelSelectionForTest("Latest", "GPT-5.6 Sol")).toThrow(
+    expect(() => assertResolvedModelSelectionForTest("GPT-6", "Latest")).not.toThrow();
+    expect(() => assertResolvedModelSelectionForTest("GPT-6", "GPT-5.6 Sol")).toThrow(
       /requires GPT-6 Astra/,
     );
   });
@@ -1892,6 +1971,7 @@ describe("browser model selection matchers", () => {
     const expression = buildModelSelectionExpressionForTest("gpt-5.5-pro");
     expect(expression).toContain('data-testid="model-switcher-dropdown-button"');
     expect(expression).toContain("button.__composer-pill[aria-haspopup=");
+    expect(expression).toContain('button[data-codex-intelligence-trigger="true"]');
     expect(expression).toContain("const findModelButton = () =>");
     expect(expression).toContain("button.__composer-pill')).find(looksLikeModelPill)");
   });

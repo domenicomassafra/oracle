@@ -9,6 +9,7 @@ import { logDomFailure } from "../domDebug.js";
 import { BrowserAutomationError } from "../../oracle/errors.js";
 import { transferAttachmentViaDataTransfer } from "./attachmentDataTransfer.js";
 import { buildAttachmentProgressExpression } from "./attachmentProgress.js";
+import { buildActiveComposerRootExpression } from "./composerRoot.js";
 import {
   assertComposerPlusStayedInPlace,
   assertComposerNavigationSnapshot,
@@ -1375,62 +1376,7 @@ export async function clearComposerAttachments(
   const deadline = Date.now() + Math.max(0, timeoutMs);
   const expression = `(() => {
     ${buildAttachmentEvidenceExpression([], "clear")};
-    const promptSelectors = ${JSON.stringify(INPUT_SELECTORS)};
-    const sendSelectors = ${JSON.stringify(SEND_BUTTON_SELECTORS)};
-    const findPromptNode = () => {
-      for (const selector of promptSelectors) {
-        const nodes = Array.from(document.querySelectorAll(selector));
-        for (const node of nodes) {
-          if (!(node instanceof HTMLElement)) continue;
-          const rect = node.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) return node;
-        }
-      }
-      for (const selector of promptSelectors) {
-        const node = document.querySelector(selector);
-        if (node) return node;
-      }
-      return null;
-    };
-    const attachmentSelectors = [
-      'input[type="file"]',
-      '[data-testid*="attachment"]',
-      '[data-testid*="upload"]',
-      '[aria-label*="Remove"]',
-      '[aria-label*="remove"]',
-    ];
-    const locateComposerRoot = () => {
-      const promptNode = findPromptNode();
-      if (promptNode) {
-        const initial =
-          promptNode.closest('[data-testid*="composer"]') ??
-          promptNode.closest('form') ??
-          promptNode.parentElement ??
-          document.body;
-        let current = initial;
-        let fallback = initial;
-        while (current && current !== document.body) {
-          const hasSend = sendSelectors.some((selector) => current.querySelector(selector));
-          if (hasSend) {
-            fallback = current;
-            const hasAttachment = attachmentSelectors.some((selector) => current.querySelector(selector));
-            if (hasAttachment) {
-              return current;
-            }
-          }
-          current = current.parentElement;
-        }
-        return fallback ?? initial;
-      }
-      return document.querySelector('form') ?? document.body;
-    };
-    const root = locateComposerRoot();
-    const scope = (() => {
-      if (!root) return document.body;
-      const parent = root.parentElement;
-      const parentHasSend = parent && sendSelectors.some((selector) => parent.querySelector(selector));
-      return parentHasSend ? parent : root;
-    })();
+    const scope = ${buildActiveComposerRootExpression()};
     const removeSelectors = [
       '[aria-label="Remove file"]',
       'button[aria-label="Remove file"]',
@@ -1438,14 +1384,26 @@ export async function clearComposerAttachments(
       '[aria-label*="remove file"]',
       '[data-testid*="remove-attachment"]',
       '[data-testid*="attachment-remove"]',
+      'button[aria-label$=" を削除"]',
     ];
     const visible = (el) => {
       if (!(el instanceof HTMLElement)) return false;
       const rect = el.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     };
+    // Current Japanese cards have no test ID. Accept their removal button only
+    // with the same card scoping the receipt scanner uses, so unrelated
+    // "... を削除" controls (history, drafts) are never clicked.
+    const isRemoveControl = (el) => {
+      if (!el.matches('button[aria-label$=" を削除"]')) return true;
+      const label = el.getAttribute('aria-label') ?? '';
+      return (
+        /^.+ を削除$/.test(label) &&
+        Boolean(el.closest('[class~="group/composer-attachment"]') && el.closest('[data-composer-attachments]'))
+      );
+    };
     const removeButtons = scope
-      ? Array.from(scope.querySelectorAll(removeSelectors.join(','))).filter(visible)
+      ? Array.from(scope.querySelectorAll(removeSelectors.join(','))).filter(visible).filter(isRemoveControl)
       : [];
     for (const button of removeButtons.slice(0, 20)) {
       try {
@@ -1983,9 +1941,9 @@ function buildUserTurnAttachmentExpression(options: {
     }
     const turns = ${buildConversationTurnListExpression()};
     const userTurns = turns.map((node, index) => ({ node, index })).filter(({ node }) => {
-      const attr = (node.getAttribute('data-message-author-role') || node.getAttribute('data-turn') || node.dataset?.turn || '').toLowerCase();
+      const attr = (node.getAttribute('data-message-author-role') || (node.getAttribute?.('data-content-search-unit-key') || node.getAttribute?.('data-chatgpt-search-unit-key'))?.split(':').at(-1) || node.getAttribute('data-turn') || node.dataset?.turn || '').toLowerCase();
       if (attr === 'user') return true;
-      return Boolean(node.querySelector('[data-message-author-role="user"]'));
+      return Boolean(node.querySelector(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])'));
     });
     const eligibleTurns =
       MIN_TURN_INDEX === null ? userTurns : userTurns.filter(({ index }) => index >= MIN_TURN_INDEX);
@@ -2081,17 +2039,55 @@ export function buildUserTurnAttachmentExpressionForTest(options?: {
   });
 }
 
+export interface AttachmentVisibleOptions {
+  /**
+   * Count a file input that still holds the file (default true). ChatGPT's change handler empties
+   * the input whenever it runs, whether it keeps the file or not, so after Oracle filled that
+   * input itself the FileList shows only that the handler has not run; such callers pass false.
+   */
+  countFileInput?: boolean;
+}
+
 export async function waitForAttachmentVisible(
   Runtime: ChromeClient["Runtime"],
   expectedName: string,
   timeoutMs: number,
   logger?: BrowserLogger,
   evidenceId?: string,
+  options: AttachmentVisibleOptions = {},
 ): Promise<void> {
   // Attachments can take a few seconds to render in the composer (headless/remote Chrome is slower),
   // so respect the caller-provided timeout instead of capping at 2s.
   const deadline = Date.now() + timeoutMs;
-  const expression = `(() => {
+  while (Date.now() < deadline) {
+    if (await isAttachmentVisible(Runtime, expectedName, evidenceId, options)) {
+      return;
+    }
+    await delay(200);
+  }
+  logger?.("Attachment not visible in composer; giving up.");
+  await logDomFailure(Runtime, logger ?? (() => {}), "attachment-visible");
+  throw new Error("Attachment did not appear in ChatGPT composer.");
+}
+
+/** One read of whether the composer shows `expectedName` as attached. Never waits or logs. */
+export async function isAttachmentVisible(
+  Runtime: ChromeClient["Runtime"],
+  expectedName: string,
+  evidenceId?: string,
+  { countFileInput = true }: AttachmentVisibleOptions = {},
+): Promise<boolean> {
+  if (evidenceId) await confirmAttachmentEvidence(Runtime, evidenceId);
+  const { result } = await Runtime.evaluate({
+    expression: buildAttachmentVisibleExpression(expectedName, countFileInput),
+    returnByValue: true,
+  });
+  return Boolean((result?.value as { found?: boolean } | undefined)?.found);
+}
+
+function buildAttachmentVisibleExpression(expectedName: string, countFileInput: boolean): string {
+  return `(() => {
+    const countFileInput = ${JSON.stringify(countFileInput)};
     if ((${buildAttachmentEvidenceExpression([expectedName])})[0]) return { found: true, source: 'upload-evidence' };
     const namePattern = new RegExp(${JSON.stringify(buildAttachmentNamePattern(expectedName, true)?.source ?? "(?!)")}, 'iu');
     const matchesExpectedFileName = (value) => {
@@ -2109,7 +2105,7 @@ export async function waitForAttachmentVisible(
       return candidates.some(matchesExpectedFileName);
     };
 
-    const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+    const inputs = countFileInput ? Array.from(document.querySelectorAll('input[type="file"]')) : [];
     for (const input of inputs) {
       if (!(input instanceof HTMLInputElement)) continue;
       const files = Array.from(input.files || []);
@@ -2185,18 +2181,6 @@ export async function waitForAttachmentVisible(
 
     return { found: false };
   })()`;
-  while (Date.now() < deadline) {
-    if (evidenceId) await confirmAttachmentEvidence(Runtime, evidenceId);
-    const { result } = await Runtime.evaluate({ expression, returnByValue: true });
-    const value = result?.value as { found?: boolean } | undefined;
-    if (value?.found) {
-      return;
-    }
-    await delay(200);
-  }
-  logger?.("Attachment not visible in composer; giving up.");
-  await logDomFailure(Runtime, logger ?? (() => {}), "attachment-visible");
-  throw new Error("Attachment did not appear in ChatGPT composer.");
 }
 
 async function waitForAttachmentAnchored(

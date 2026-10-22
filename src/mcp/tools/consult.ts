@@ -23,6 +23,7 @@ export async function readSessionLogTail(
 import { performSessionRun } from "../../cli/sessionRunner.js";
 import { runDryRunSummary } from "../../cli/dryRun.js";
 import { CHATGPT_URL } from "../../browser/constants.js";
+import { resolveBrowserNoFocus } from "../../browser/config.js";
 import {
   CONSULT_PRESETS,
   browserThinkingTimeRawSchema,
@@ -78,7 +79,7 @@ const consultInputShape = {
     .string()
     .optional()
     .describe(
-      'Browser-only: explicit ChatGPT UI label to select (overrides model mapping). Example: "GPT-5.2 Thinking".',
+      "Browser-only: ChatGPT UI label for custom model IDs. Recognized GPT models use their verified model mapping.",
     ),
   browserAttachments: z
     .enum(["auto", "never", "always"])
@@ -383,6 +384,8 @@ export function buildConsultBrowserConfig({
       : configuredBrowser.cookieSync === true,
     headless: configuredBrowser.headless ?? false,
     hideWindow: configuredBrowser.hideWindow ?? false,
+    // Record the setting the run uses, as the CLI does, so recovery follows this run.
+    noFocus: resolveBrowserNoFocus(configuredBrowser),
     keepBrowser: browserKeepBrowser ?? configuredBrowser.keepBrowser ?? false,
     manualLogin,
     manualLoginProfileDir: manualLogin

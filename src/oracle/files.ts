@@ -67,15 +67,20 @@ export async function readFiles(
     .map((dir) => path.resolve(dir))
     .filter((dir) => DEFAULT_IGNORED_DIRS.has(path.basename(dir)));
   const allowedLiteralFiles = partitioned.literalFiles.map((file) => path.resolve(file));
-  const resolvedLiteralDirs = new Set(allowedLiteralDirs);
   const allowedPaths = new Set([...allowedLiteralDirs, ...allowedLiteralFiles]);
-  const ignoredWhitelist = await buildIgnoredWhitelist(candidatePaths, cwd, fsModule);
+  const rootByPath = await assignExpansionRoots(
+    candidatePaths,
+    getExpansionRoots(partitioned, cwd),
+    cwd,
+    partitioned.excludePatterns,
+  );
+  const ignoredWhitelist = await buildIgnoredWhitelist(candidatePaths, rootByPath, cwd, fsModule);
   const ignoredLog = new Set<string>();
   const filteredCandidates = candidatePaths.filter((filePath) => {
     const ignoredDir = findIgnoredAncestor(
       filePath,
       cwd,
-      resolvedLiteralDirs,
+      rootByPath,
       allowedPaths,
       ignoredWhitelist,
     );
@@ -193,6 +198,97 @@ async function partitionFileInputs(
   return result;
 }
 
+// Where each --file input expands from: literal files and directories as given, plus the
+// static base of every glob alternative (e.g. `/tmp/pack` for `/tmp/pack/**/*.md`). A glob
+// root keeps its pattern, because another input may supply files that sit under it.
+type ExpansionRoot = { root: string; pattern?: string };
+
+function getExpansionRoots(partitioned: PartitionedFiles, cwd: string): ExpansionRoot[] {
+  const literals = [...partitioned.literalFiles, ...partitioned.literalDirectories].map(
+    (entry) => ({ root: path.resolve(entry) }),
+  );
+  // fast-glob merges brace alternatives under one task base, so take each alternative's own.
+  const globs = partitioned.globPatterns.flatMap((pattern) =>
+    fg.generateTasks(pattern).flatMap((task) =>
+      task.positive.map((alternative) => ({
+        root: path.resolve(cwd, fg.generateTasks(alternative)[0]?.base ?? task.base),
+        pattern: alternative,
+      })),
+    ),
+  );
+  return [...literals, ...globs];
+}
+
+// Default ignores count only below the requested directory or glob base, so an ancestor such
+// as /tmp in `--file /tmp/pack` does not hide the files the user asked for. Each file is
+// measured from the deepest root of an input that matched it. A deeper glob root has to show
+// it matched the file (one extra glob run, cached, only when roots overlap); the shallowest
+// containing root must be where the file came from.
+async function assignExpansionRoots(
+  candidatePaths: string[],
+  expansionRoots: ExpansionRoot[],
+  cwd: string,
+  excludePatterns: string[],
+): Promise<Map<string, string>> {
+  const patternsByRoot = new Map<string, string[] | null>(); // null: a literal input owns the root
+  for (const { root, pattern } of expansionRoots) {
+    const patterns = patternsByRoot.get(root);
+    if (patterns !== null) {
+      patternsByRoot.set(root, pattern === undefined ? null : [...(patterns ?? []), pattern]);
+    }
+  }
+  const roots = Array.from(patternsByRoot.keys()).sort((a, b) => b.length - a.length);
+  const globMatches = new Map<string, Promise<Set<string>>>();
+  const matchesGlob = async (pattern: string, absolute: string) => {
+    if (!globMatches.has(pattern)) {
+      const found = fg(pattern, {
+        cwd,
+        dot: true,
+        ignore: excludePatterns,
+        onlyFiles: true,
+        followSymbolicLinks: false,
+        suppressErrors: true,
+      }).then((matches) => new Set(matches.map((match) => path.resolve(cwd, match))));
+      globMatches.set(pattern, found);
+    }
+    return (await globMatches.get(pattern))?.has(absolute) ?? false;
+  };
+  const rootByPath = new Map<string, string>();
+  for (const filePath of candidatePaths) {
+    const absolute = path.resolve(filePath);
+    const containing = roots.filter((root) => isWithin(absolute, root));
+    let chosen = containing.at(-1) ?? cwd;
+    for (const root of containing.slice(0, -1)) {
+      const patterns = patternsByRoot.get(root);
+      if (patterns === null || patterns === undefined) {
+        chosen = root;
+        break;
+      }
+      let matched = false;
+      for (const pattern of patterns) {
+        if (await matchesGlob(pattern, absolute)) {
+          matched = true;
+          break;
+        }
+      }
+      if (matched) {
+        chosen = root;
+        break;
+      }
+    }
+    rootByPath.set(absolute, chosen);
+  }
+  return rootByPath;
+}
+
+function isWithin(target: string, root: string): boolean {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
 async function expandWithNativeGlob(partitioned: PartitionedFiles, cwd: string): Promise<string[]> {
   const patterns = [
     ...partitioned.globPatterns,
@@ -208,7 +304,10 @@ async function expandWithNativeGlob(partitioned: PartitionedFiles, cwd: string):
 
   const dotfileOptIn = patterns.some((pattern) => includesDotfileSegment(pattern));
 
-  const gitignoreSets = await loadGitignoreSets(cwd);
+  const gitignoreSets = await loadGitignoreSets(
+    cwd,
+    getExpansionRoots(partitioned, cwd).map(({ root }) => root),
+  );
 
   const matches = (await fg(patterns, {
     cwd,
@@ -229,15 +328,64 @@ async function expandWithNativeGlob(partitioned: PartitionedFiles, cwd: string):
 
 type GitignoreSet = { dir: string; patterns: string[] };
 
-async function loadGitignoreSets(cwd: string): Promise<GitignoreSet[]> {
-  const gitignorePaths = await fg("**/.gitignore", {
-    cwd,
-    dot: true,
-    absolute: true,
-    onlyFiles: true,
-    followSymbolicLinks: false,
-    suppressErrors: true,
-  });
+// Only .gitignore files under cwd that sit on the way to, or inside, a requested path can
+// apply to a match, so read those instead of walking the whole cwd tree. Like that walk,
+// never look past a symlinked directory.
+async function loadGitignoreSets(requestCwd: string, roots: string[]): Promise<GitignoreSet[]> {
+  // Absolute, like the paths fast-glob returns, so the sets match absolute candidates.
+  const cwd = path.resolve(requestCwd);
+  const gitignorePaths = new Set<string>();
+  const addIfFile = async (dir: string) => {
+    const candidate = path.join(dir, ".gitignore");
+    try {
+      if ((await fs.lstat(candidate)).isFile()) {
+        gitignorePaths.add(toPosix(candidate)); // same form fast-glob returns below
+      }
+    } catch {
+      // no .gitignore at this level
+    }
+  };
+  const scanDirs: string[] = [];
+  for (const root of roots) {
+    if (isWithin(cwd, root)) {
+      scanDirs.push(cwd);
+      continue;
+    }
+    if (!isWithin(root, cwd)) {
+      continue;
+    }
+    await addIfFile(cwd);
+    const segments = path.relative(cwd, root).split(path.sep);
+    let dir = cwd;
+    for (let index = 0; index < segments.length; index += 1) {
+      dir = path.join(dir, segments[index]);
+      const stats = await fs.lstat(dir).catch(() => null);
+      if (!stats?.isDirectory()) {
+        break; // a file, a symlink, or missing: nothing further down was ever walked
+      }
+      if (index === segments.length - 1) {
+        scanDirs.push(dir);
+      } else {
+        await addIfFile(dir);
+      }
+    }
+  }
+  const outermostDirs = scanDirs
+    .sort((a, b) => a.length - b.length)
+    .filter((dir, index, dirs) => !dirs.slice(0, index).some((outer) => isWithin(dir, outer)));
+  for (const dir of outermostDirs) {
+    const found = await fg("**/.gitignore", {
+      cwd: dir,
+      dot: true,
+      absolute: true,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+      suppressErrors: true,
+    });
+    for (const filePath of found) {
+      gitignorePaths.add(filePath);
+    }
+  }
   const sets: GitignoreSet[] = [];
   for (const filePath of gitignorePaths) {
     try {
@@ -259,10 +407,11 @@ async function loadGitignoreSets(cwd: string): Promise<GitignoreSet[]> {
 
 function isGitignored(filePath: string, sets: GitignoreSet[]): boolean {
   for (const { dir, patterns } of sets) {
-    if (!filePath.startsWith(dir)) {
+    // Native path comparison also handles fast-glob's forward slashes on Windows.
+    if (!isWithin(filePath, dir)) {
       continue;
     }
-    const relative = path.relative(dir, filePath) || path.basename(filePath);
+    const relative = toPosix(path.relative(dir, filePath) || path.basename(filePath));
     if (matchesAny(relative, patterns)) {
       return true;
     }
@@ -272,20 +421,22 @@ function isGitignored(filePath: string, sets: GitignoreSet[]): boolean {
 
 async function buildIgnoredWhitelist(
   filePaths: string[],
+  rootByPath: Map<string, string>,
   cwd: string,
   fsModule: MinimalFsModule,
 ): Promise<Set<string>> {
   const whitelist = new Set<string>();
   for (const filePath of filePaths) {
     const absolute = path.resolve(filePath);
-    const rel = path.relative(cwd, absolute);
+    const root = rootByPath.get(absolute) ?? cwd;
+    const rel = path.relative(root, absolute);
     const parts = rel.split(path.sep).filter(Boolean);
     for (let i = 0; i < parts.length - 1; i += 1) {
       const part = parts[i];
       if (!DEFAULT_IGNORED_DIRS.has(part)) {
         continue;
       }
-      const dirPath = path.resolve(cwd, ...parts.slice(0, i + 1));
+      const dirPath = path.resolve(root, ...parts.slice(0, i + 1));
       if (whitelist.has(dirPath)) {
         continue;
       }
@@ -305,7 +456,7 @@ async function buildIgnoredWhitelist(
 function findIgnoredAncestor(
   filePath: string,
   cwd: string,
-  _literalDirs: Set<string>,
+  rootByPath: Map<string, string>,
   allowedPaths: Set<string>,
   ignoredWhitelist: Set<string>,
 ): string | null {
@@ -317,14 +468,15 @@ function findIgnoredAncestor(
   ) {
     return null; // explicitly requested path overrides default ignore when the ignored dir itself was passed
   }
-  const rel = path.relative(cwd, absolute);
+  const root = rootByPath.get(absolute) ?? cwd;
+  const rel = path.relative(root, absolute);
   const parts = rel.split(path.sep);
   for (let idx = 0; idx < parts.length; idx += 1) {
     const part = parts[idx];
     if (!DEFAULT_IGNORED_DIRS.has(part)) {
       continue;
     }
-    const ignoredDir = path.resolve(cwd, parts.slice(0, idx + 1).join(path.sep));
+    const ignoredDir = path.resolve(root, parts.slice(0, idx + 1).join(path.sep));
     if (ignoredWhitelist.has(ignoredDir)) {
       continue;
     }

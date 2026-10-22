@@ -13,7 +13,7 @@ import { materializeStagedFallbackBundle } from "../browser/prompt.js";
 import type { BrowserSessionConfig } from "../sessionManager.js";
 import type { runBrowserMode } from "../browserMode.js";
 import { resolveBrowserExecutor } from "../browser/executor.js";
-import { resolveBrowserConfig } from "../browser/config.js";
+import { resolveBrowserConfig, resolveBrowserNoFocus } from "../browser/config.js";
 import { RunSlots } from "./runSlots.js";
 export { RunSlots } from "./runSlots.js";
 import { loadUserConfig } from "../config.js";
@@ -25,7 +25,11 @@ import type {
   RemoteRunPayload,
   RemoteRunEvent,
 } from "./types.js";
-import { MAX_REMOTE_ARTIFACT_BYTES, pickRemoteImageMetadata } from "./types.js";
+import {
+  MAX_REMOTE_ARTIFACT_BYTES,
+  MAX_REMOTE_REQUEST_BODY_BYTES,
+  pickRemoteImageMetadata,
+} from "./types.js";
 import { getCookies, type Cookie } from "@steipete/sweet-cookie";
 import { CHATGPT_URL } from "../browser/constants.js";
 import { getCliVersion } from "../version.js";
@@ -51,7 +55,7 @@ import type { BrowserRunWarning, SessionArtifact } from "../sessionManager.js";
 
 export type RemoteHostBrowserConfig = Pick<
   BrowserSessionConfig,
-  "attachRunning" | "remoteChrome" | "approvalWaitMs"
+  "attachRunning" | "remoteChrome" | "approvalWaitMs" | "noFocus"
 >;
 
 export interface RemoteServerOptions {
@@ -73,6 +77,8 @@ export interface RemoteServerOptions {
 
 interface RemoteServerDeps {
   runBrowser?: typeof runBrowserMode;
+  /** Test-only cap. Operators always use the fixed request-body constant. */
+  maxRequestBodyBytes?: number;
 }
 
 interface RemoteServerInstance {
@@ -157,6 +163,7 @@ export async function createRemoteServer(
           ? { ...options.browserConfig.remoteChrome }
           : undefined,
         approvalWaitMs: options.browserConfig?.approvalWaitMs,
+        noFocus: options.browserConfig?.noFocus,
       }
     : {};
   const server = http.createServer();
@@ -168,6 +175,7 @@ export async function createRemoteServer(
     ? (formatter: (msg: string) => string, msg: string) => formatter(msg)
     : (_formatter: (msg: string) => string, msg: string) => msg;
   validateAdmissionOptions(options);
+  const maxRequestBodyBytes = resolveMaxRequestBodyBytes(deps.maxRequestBodyBytes);
   const admissionEnabled = options.maxConcurrentRuns !== undefined;
   const hostConfig = admissionEnabled ? (await loadUserConfig()).config.browser : undefined;
   const browserTabCap = admissionEnabled
@@ -317,14 +325,23 @@ export async function createRemoteServer(
     if (admissionEnabled) reserve();
     let payload: RemoteRunPayload;
     try {
-      payload = JSON.parse(await readRequestBody(req, controller.signal)) as RemoteRunPayload;
+      payload = JSON.parse(
+        await readRequestBody(req, controller.signal, maxRequestBodyBytes),
+      ) as RemoteRunPayload;
       if (!payload || typeof payload.prompt !== "string") throw new Error("Missing prompt");
       payload.options ??= {};
       if (payload.browserConfig)
         payload.browserConfig.url = normalizeChatgptUrl(payload.browserConfig.url, CHATGPT_URL);
-    } catch {
+    } catch (error) {
+      const tooLarge = error instanceof RemotePayloadTooLargeError;
+      if (tooLarge && !res.destroyed && !res.headersSent) {
+        res.writeHead(413, { "Content-Type": "application/json", Connection: "close" });
+        res.end(JSON.stringify({ error: "payload_too_large" }), () => {
+          req.destroy();
+        });
+      }
       await abandon();
-      if (!res.destroyed) {
+      if (!tooLarge && !res.destroyed && !res.headersSent) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "invalid_request" }));
       }
@@ -565,7 +582,11 @@ export async function createRemoteServer(
       }
       sendEvent({
         type: "result",
-        result: sanitizeResult(result, artifactRegistration.warnings),
+        result: sanitizeResult(
+          result,
+          artifactRegistration.warnings,
+          resolveBrowserNoFocus(payload.browserConfig),
+        ),
       });
       logger(
         `[serve] Run ${runId} completed in ${Date.now() - runStartedAt}ms${
@@ -1005,17 +1026,54 @@ function classifySourceUrlKind(sourceUrl?: string): RemoteArtifactDescriptor["so
   return "chatgpt-file-endpoint";
 }
 
-async function readRequestBody(req: http.IncomingMessage, signal?: AbortSignal): Promise<string> {
+class RemotePayloadTooLargeError extends Error {
+  constructor() {
+    super("payload_too_large");
+    this.name = "RemotePayloadTooLargeError";
+  }
+}
+
+function resolveMaxRequestBodyBytes(value: number | undefined): number {
+  if (value === undefined) return MAX_REMOTE_REQUEST_BODY_BYTES;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("maxRequestBodyBytes must be a positive integer.");
+  }
+  return value;
+}
+
+function declaredContentLength(req: http.IncomingMessage): number | undefined {
+  const raw = req.headers["content-length"];
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+async function readRequestBody(
+  req: http.IncomingMessage,
+  signal?: AbortSignal,
+  maxBytes: number = MAX_REMOTE_REQUEST_BODY_BYTES,
+): Promise<string> {
   if (signal?.aborted) {
     req.destroy();
     signal.throwIfAborted();
+  }
+  const declared = declaredContentLength(req);
+  if (declared !== undefined && declared > maxBytes) {
+    throw new RemotePayloadTooLargeError();
   }
   const onAbort = () => req.destroy();
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    let received = 0;
+    // Leaving the iterator early must not destroy the socket before HTTP 413 is flushed.
+    for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+      const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      received += buffer.length;
+      if (received > maxBytes) {
+        throw new RemotePayloadTooLargeError();
+      }
+      chunks.push(buffer);
     }
     signal?.throwIfAborted();
     return Buffer.concat(chunks).toString("utf8");
@@ -1112,6 +1170,7 @@ async function stageRemoteAttachments(
 function sanitizeResult(
   result: BrowserRunResult,
   warnings: BrowserRunWarning[] = [],
+  noFocus?: boolean,
 ): BrowserRunResult {
   const hostArtifactPaths = [
     ...(result.savedFiles ?? []),
@@ -1157,6 +1216,7 @@ function sanitizeResult(
     promptSubmitted: result.promptSubmitted,
     submittedPromptHash: result.submittedPromptHash,
     warnings: warnings.length > 0 ? warnings : undefined,
+    noFocus,
     chromePid: undefined,
     chromePort: undefined,
     userDataDir: undefined,

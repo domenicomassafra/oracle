@@ -183,17 +183,17 @@ export async function showStatus({
   modelFilter,
 }: ShowStatusOptions): Promise<void> {
   const metas = await sessionStore.listSessions();
-  const { entries, truncated, total } = sessionStore.filterSessions(metas, {
+  const matchingMetas = modelFilter
+    ? metas.filter((entry) => matchesModel(entry, modelFilter))
+    : metas;
+  const { entries, truncated, total } = sessionStore.filterSessions(matchingMetas, {
     hours,
     includeAll,
     limit,
   });
-  const filteredEntries = modelFilter
-    ? entries.filter((entry) => matchesModel(entry, modelFilter))
-    : entries;
   const richTty = process.stdout.isTTY && chalk.level > 0;
   const responseOwners = buildResponseOwnerIndex(metas);
-  if (!filteredEntries.length) {
+  if (!entries.length) {
     console.log(CLEANUP_TIP);
     if (showExamples) {
       printStatusExamples();
@@ -202,7 +202,7 @@ export async function showStatus({
   }
   console.log(chalk.bold("Recent Sessions"));
   console.log(formatSessionTableHeader(richTty));
-  const treeRows = buildStatusTreeRows(filteredEntries, responseOwners);
+  const treeRows = buildStatusTreeRows(entries, responseOwners);
   for (const row of treeRows) {
     const line = formatSessionTableRow(row.entry, { rich: richTty, displaySlug: row.displaySlug });
     const detachedParent =
@@ -217,7 +217,7 @@ export async function showStatus({
     const sessionsDir = sessionStore.sessionsDir();
     console.log(
       chalk.yellow(
-        `Showing ${entries.length} of ${total} sessions from the requested range. Run "oracle session --clear" or delete entries in ${sessionsDir} to free space, or rerun with --status-limit/--status-all.`,
+        `Showing ${entries.length} of ${total} sessions from the requested range. Run "oracle session --clear" or delete entries in ${sessionsDir} to free space, or rerun "oracle status" with a higher --limit <count> (maximum 1000); add --all to include older sessions.`,
       ),
     );
   }
@@ -808,9 +808,12 @@ export function trimBeforeFirstAnswer(logText: string): string {
     return logText;
   }
   const laterIndex = logText.lastIndexOf(marker);
-  const reattachIndex = logText.indexOf("[reattach]", index + marker.length);
+  const afterFirstAnswer = index + marker.length;
+  // Reattach writers log "[reattach]"; the session runner's auto-reattach loop logs "[auto-reattach]".
+  const reattachOffset = logText.slice(afterFirstAnswer).search(/\[(?:auto-)?reattach\]/);
+  const reattachIndex = reattachOffset === -1 ? -1 : afterFirstAnswer + reattachOffset;
   if (laterIndex > index && reattachIndex > index && reattachIndex < laterIndex) {
-    const firstCapture = logText.slice(index + marker.length, reattachIndex);
+    const firstCapture = logText.slice(afterFirstAnswer, reattachIndex);
     if (isDeepResearchToolCallPlaceholder(firstCapture)) {
       return logText.slice(laterIndex);
     }
@@ -1003,7 +1006,11 @@ async function buildSessionLogForDisplay(
   const models = freshMetadata.models ?? fallbackMeta.models ?? [];
   if (models.length === 0) {
     if (normalizedFilter) {
-      return await sessionStore.readModelLog(sessionId, modelFilter as string);
+      const modelLog = await sessionStore.readModelLog(
+        sessionId,
+        freshMetadata.model ?? (modelFilter as string),
+      );
+      return modelLog || sessionStore.readLog(sessionId);
     }
     return await sessionStore.readLog(sessionId);
   }
@@ -1023,7 +1030,8 @@ async function buildSessionLogForDisplay(
     sections.push(`=== ${model.model} ===\n${body}`.trimEnd());
   }
   if (!hasContent) {
-    // Fallback for runs that recorded output only in the session log (e.g., browser runs without per-model logs).
+    if (normalizedFilter && models.length > 1) return "";
+    // Single-model browser runs may record output only in the session log.
     return await sessionStore.readLog(sessionId);
   }
   return sections.join("\n\n");

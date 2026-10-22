@@ -19,6 +19,19 @@ import { redactBrowserConfigForDebugLog } from "../../src/browser/configLogging.
 import { BrowserAutomationError } from "../../src/oracle/errors.js";
 
 describe("generated image response failures", () => {
+  test("completes image generation when a detached gallery appears without answer text", async () => {
+    const evaluate = vi.fn(async ({ expression }: { expression: string }) => ({
+      result: {
+        value: expression.includes("const isGeneratedImage")
+          ? [{ url: "blob:https://chatgpt.com/00000000-0000-4000-8000-000000000001", width: 1024 }]
+          : { text: "Edit", turnIndex: 2 },
+      },
+    }));
+    await expect(
+      __test__.pollGeneratedImageOrTextAssistantResponse({ evaluate } as never, 100, 2),
+    ).resolves.toMatchObject({ text: "Generated image" });
+  });
+
   test("rejects a current Retry failure instead of accepting its text as an image answer", async () => {
     const evaluate = vi.fn().mockResolvedValue({
       result: {
@@ -41,6 +54,23 @@ describe("generated image response failures", () => {
       details: { stage: "assistant-ui-error", code: "chatgpt-ui-warning" },
     });
     expect(evaluate).toHaveBeenCalledOnce();
+  });
+
+  test("does not accept chrome text just because the html quotes an estuary file URL", async () => {
+    const evaluate = vi.fn(async ({ expression }: { expression: string }) => ({
+      result: {
+        value: expression.includes("const isGeneratedImage")
+          ? []
+          : {
+              text: "Edit",
+              html: "<p>See /backend-api/estuary/content?id=file_quoted</p>",
+              turnIndex: 2,
+            },
+      },
+    }));
+    await expect(
+      __test__.pollGeneratedImageOrTextAssistantResponse({ evaluate } as never, 100, 2),
+    ).resolves.toBeNull();
   });
 });
 
@@ -385,6 +415,27 @@ describe("browser run target cleanup", () => {
 });
 
 describe("manual-login profile setup gate", () => {
+  test("announces missing login and reveals the window before retrying", async () => {
+    const evaluate = vi
+      .fn()
+      .mockResolvedValueOnce({ result: { value: { ok: false, domLoginCta: true } } })
+      .mockResolvedValueOnce({ result: { value: { clicked: false, reason: "not-found" } } })
+      .mockResolvedValue({ result: { value: { ok: true } } });
+    const logger = vi.fn();
+    const onLoginRequired = vi.fn(async () => {});
+    await __test__.waitForLogin({
+      runtime: { evaluate } as never,
+      logger,
+      appliedCookies: 0,
+      manualLogin: true,
+      timeoutMs: 5000,
+      keepBrowser: false,
+      onLoginRequired,
+    });
+    expect(onLoginRequired).toHaveBeenCalledOnce();
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("[browser] Manual login required"));
+  });
+
   test("fails fast for an uninitialized manual-login profile unless setup keeps Chrome open", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "oracle-empty-profile-"));
     try {

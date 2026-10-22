@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import * as childProcess from "node:child_process";
 import net from "node:net";
@@ -14,6 +14,7 @@ import {
 import type Protocol from "devtools-protocol";
 import type { BrowserLogger, ResolvedBrowserConfig, ChromeClient } from "./types.js";
 import { cleanupStaleProfileState } from "./profileState.js";
+import { resolveBrowserNoFocus } from "./config.js";
 import { delay } from "./utils.js";
 import { isWsl, resolveWslChromeLaunchRoute } from "./wslHost.js";
 import { BrowserCancellation } from "./cancellation.js";
@@ -25,9 +26,14 @@ export async function launchChrome(
   logger: BrowserLogger,
 ) {
   const { connectHost, debugBindAddress, usePatchedLauncher } = resolveWslChromeLaunchRoute();
-  const debugPort = config.debugPort ?? parseDebugPortEnv();
+  // Persistent stderr logs can contain an older browser's dynamically assigned port.
+  const debugPort = (config.debugPort ?? parseDebugPortEnv()) || (await findEphemeralPort());
   const usingCopiedProfile = Boolean(config.copyProfileSource);
   const detachSharedChrome = shouldDetachSharedChrome(config);
+  const nativeKeychainMarker = path.join(userDataDir, ".oracle-native-keychain-v1");
+  const nativeManualLogin =
+    config.manualLogin === true &&
+    (await shouldUseNativeManualLoginKeychain(userDataDir, process.platform));
   const launchedProfileDirectory =
     usingCopiedProfile && config.chromeProfile ? config.chromeProfile : "Default";
   await prepareChromeWindowStateForHiddenLaunch({
@@ -40,6 +46,7 @@ export async function launchChrome(
     config.headless ?? false,
     debugBindAddress,
     config.hideWindow ?? false,
+    resolveBrowserNoFocus(config),
   );
   // copy-profile reuses a copied signed-in profile whose cookies are
   // Keychain-encrypted, so it must launch with the real Keychain (not mocked):
@@ -49,7 +56,11 @@ export async function launchChrome(
   if (selectedProfile) {
     chromeFlags.push(`--profile-directory=${selectedProfile}`);
   }
-  const launchOptions = resolveChromeLaunchOptions(chromeFlags, usingCopiedProfile);
+  const launchOptions = resolveChromeLaunchOptions(
+    chromeFlags,
+    usingCopiedProfile,
+    nativeManualLogin,
+  );
   const launcher = usePatchedLauncher
     ? await launchWithCustomHost({
         chromeFlags: launchOptions.chromeFlags,
@@ -72,6 +83,13 @@ export async function launchChrome(
         detachSharedChrome,
       );
   const pidLabel = typeof launcher.pid === "number" ? ` (pid ${launcher.pid})` : "";
+  if (nativeManualLogin) {
+    await writeFile(nativeKeychainMarker, "native-keychain\n");
+  } else if (config.manualLogin && process.platform === "darwin" && !usingCopiedProfile) {
+    logger(
+      "[browser] Existing manual-login profile retains its saved Chrome login. To use the native Keychain, choose a new --browser-manual-login-profile-dir and sign in once.",
+    );
+  }
   const hostLabel = connectHost ? ` on ${connectHost}` : "";
   logger(`Launched Chrome${pidLabel} on port ${launcher.port}${hostLabel}`);
   if (detachSharedChrome) {
@@ -80,6 +98,19 @@ export async function launchChrome(
   return Object.assign(launcher, { host: connectHost ?? "127.0.0.1" }) as LaunchedChrome & {
     host?: string;
   };
+}
+
+export async function shouldUseNativeManualLoginKeychain(
+  userDataDir: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean> {
+  if (platform !== "darwin") return false;
+  const exists = (filePath: string) =>
+    access(filePath)
+      .then(() => true)
+      .catch(() => false);
+  if (await exists(path.join(userDataDir, ".oracle-native-keychain-v1"))) return true;
+  return !(await exists(path.join(userDataDir, "Local State")));
 }
 
 function shouldDetachSharedChrome(
@@ -489,6 +520,8 @@ export async function connectToRemoteChrome(
   options?: {
     approvalWaitMs?: number;
     fallbackToDefault?: boolean;
+    /** Open the dedicated tab without activating Chrome (see openBackgroundPageTarget). */
+    background?: boolean;
   },
 ): Promise<RemoteChromeConnection> {
   if (browserWSEndpoint) {
@@ -497,12 +530,14 @@ export async function connectToRemoteChrome(
       targetUrl: targetUrl ?? "about:blank",
       closeTargetOnDispose: true,
       approvalWaitMs: options?.approvalWaitMs,
+      background: options?.background,
     });
   }
   const newTargetUrl =
     targetUrl || (options?.fallbackToDefault === false ? "about:blank" : undefined);
   if (newTargetUrl) {
     const targetConnection = await connectToNewTarget(host, port, newTargetUrl, logger, {
+      background: options?.background,
       opened: () => `Opened dedicated remote Chrome tab targeting ${newTargetUrl}`,
       openFailed: (message) =>
         `Failed to open dedicated remote Chrome tab (${message}); ${options?.fallbackToDefault === false ? "refusing to reuse an unrelated tab" : "falling back to first target"}.`,
@@ -641,6 +676,7 @@ export async function connectToRemoteChromeTarget(
     browserWSEndpoint?: string;
     closeTargetOnDispose?: boolean;
     approvalWaitMs?: number;
+    background?: boolean;
   },
 ): Promise<RemoteChromeConnection> {
   if (!options.browserWSEndpoint) {
@@ -667,6 +703,7 @@ export async function connectToRemoteChromeTarget(
     if (!targetId) {
       const created = await browser.Target.createTarget({
         url: options.targetUrl ?? "about:blank",
+        ...(options.background ? BACKGROUND_WINDOW_TARGET : {}),
       });
       targetId = created.targetId;
       createdTargetId = targetId;
@@ -772,7 +809,7 @@ async function connectToBrowserWebSocket(
 
 function isRemoteDebuggingApprovalError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /unexpected server response:\s*403|remote debugging|forbidden/i.test(message);
+  return /unexpected server response:\s*(?:403|404)\b|remote debugging|forbidden/i.test(message);
 }
 
 function formatApprovalWait(waitMs: number): string {
@@ -782,15 +819,80 @@ function formatApprovalWait(waitMs: number): string {
   return `${waitMs}ms`;
 }
 
+// `/json/new` and a foreground `Target.createTarget` both activate Chrome, which on
+// macOS makes it the frontmost app and can switch Spaces. A background window keeps
+// the run tab selected in its own window, so it stays painted without activation.
+const BACKGROUND_WINDOW_TARGET = { background: true, newWindow: true } as const;
+
+async function openBackgroundPageTarget(
+  host: string,
+  port: number,
+  url: string,
+  placement: { newWindow?: boolean } = {},
+): Promise<string> {
+  const version = (await CDP.Version({ host, port })) as { webSocketDebuggerUrl?: string };
+  if (!version.webSocketDebuggerUrl) {
+    throw new Error("Chrome did not advertise a browser DevTools endpoint.");
+  }
+  // Chrome advertises its own bind address; connect through the host:port we reached.
+  const endpoint = new URL(version.webSocketDebuggerUrl);
+  endpoint.host = `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
+  const browser = await acquireBrowserConnection(
+    endpoint.toString(),
+    async () => (await CDP({ target: endpoint.toString(), local: true })) as ChromeClient,
+  );
+  try {
+    const created = await browser.Target.createTarget({
+      url,
+      background: true,
+      ...(placement.newWindow ? { newWindow: true } : {}),
+    });
+    return created.targetId;
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+/**
+ * A Chrome launched with --no-startup-window has no default page, so the usual fallback to the
+ * default target cannot work there. If the background open fails, a foreground tab beats a failed
+ * run; the line is printed without --verbose.
+ */
+async function openBackgroundTargetOrForeground(
+  host: string,
+  port: number,
+  url: string,
+  logger: BrowserLogger,
+): Promise<{ id: string }> {
+  try {
+    return { id: await openBackgroundPageTarget(host, port, url, BACKGROUND_WINDOW_TARGET) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger(`[browser] no-focus fallback: opening the tab in the foreground (${message}).`);
+    return await CDP.New({ host, port, url });
+  }
+}
+
+/** Open a page in a background window through an HTTP (host:port) DevTools endpoint. */
+export async function openBackgroundChromeWindow(
+  host: string,
+  port: number,
+  url: string,
+): Promise<string> {
+  return await openBackgroundPageTarget(host, port, url, BACKGROUND_WINDOW_TARGET);
+}
+
 async function connectToNewTarget(
   host: string,
   port: number,
   url: string,
   logger: BrowserLogger,
-  messages: TargetConnectMessages,
+  messages: TargetConnectMessages & { background?: boolean },
 ): Promise<{ client: ChromeClient; targetId: string } | null> {
   try {
-    const target = await CDP.New({ host, port, url });
+    const target = messages.background
+      ? await openBackgroundTargetOrForeground(host, port, url, logger)
+      : await CDP.New({ host, port, url });
     try {
       const client = await CDP({ host, port, target: target.id });
       if (messages.opened) {
@@ -931,7 +1033,12 @@ export async function connectWithNewTab(
   logger: BrowserLogger,
   initialUrl?: string,
   host?: string,
-  options?: { fallbackToDefault?: boolean; retries?: number; retryDelayMs?: number },
+  options?: {
+    fallbackToDefault?: boolean;
+    retries?: number;
+    retryDelayMs?: number;
+    background?: boolean;
+  },
 ): Promise<IsolatedTabConnection> {
   const effectiveHost = host ?? "127.0.0.1";
   const url = initialUrl ?? "about:blank";
@@ -945,6 +1052,7 @@ export async function connectWithNewTab(
   let attempt = 0;
   while (attempt <= retries) {
     const targetConnection = await connectToNewTarget(effectiveHost, port, url, logger, {
+      background: options?.background,
       opened: (targetId) => `Opened isolated browser tab (target=${targetId})`,
       openFailed: (message) => `Failed to open isolated browser tab (${message}); ${fallbackLabel}`,
       attachFailed: (targetId, message) =>
@@ -1019,14 +1127,19 @@ export async function createChromePageTarget(
   port: number,
   logger: BrowserLogger,
   host?: string,
+  options?: { background?: boolean },
 ): Promise<string | undefined> {
   const effectiveHost = host ?? "127.0.0.1";
   try {
-    const created = (await CDP.New({
-      host: effectiveHost,
-      port,
-      url: "about:blank",
-    })) as { id?: string; targetId?: string };
+    const created = (
+      options?.background
+        ? { id: await openBackgroundPageTarget(effectiveHost, port, "about:blank") }
+        : await CDP.New({
+            host: effectiveHost,
+            port,
+            url: "about:blank",
+          })
+    ) as { id?: string; targetId?: string };
     const createdTargetId = created.targetId ?? created.id;
     if (!createdTargetId) {
       logger("Failed to create a replacement Chrome tab.");
@@ -1046,6 +1159,7 @@ export async function ensureChromePageTargetAfterClose(
   closingTargetId: string,
   logger: BrowserLogger,
   host?: string,
+  options?: { background?: boolean },
 ): Promise<string | undefined> {
   const effectiveHost = host ?? "127.0.0.1";
   try {
@@ -1065,7 +1179,7 @@ export async function ensureChromePageTargetAfterClose(
     const message = error instanceof Error ? error.message : String(error);
     logger(`Failed to inspect Chrome tabs before closing ${closingTargetId}: ${message}`);
   }
-  return await createChromePageTarget(port, logger, host);
+  return await createChromePageTarget(port, logger, host, options);
 }
 
 export async function closeBlankChromeTabs(
@@ -1140,6 +1254,7 @@ function buildChromeFlags(
   headless: boolean,
   debugBindAddress?: string | null,
   hideWindow = false,
+  noFocus = false,
   runtime: { platform: NodeJS.Platform; waylandDisplay?: string } = {
     platform: process.platform,
     waylandDisplay: process.env.WAYLAND_DISPLAY,
@@ -1180,6 +1295,12 @@ function buildChromeFlags(
     flags.push(`--remote-debugging-address=${debugBindAddress}`);
   }
 
+  if (noFocus && !headless) {
+    // A startup window activates Chrome (macOS brings the app forward and can switch
+    // Spaces). The run opens its own background window instead.
+    flags.push("--no-startup-window");
+  }
+
   if (headless) {
     flags.push("--headless=new");
   } else if (runtime.platform === "linux" && runtime.waylandDisplay) {
@@ -1204,9 +1325,11 @@ export function buildChromeFlagsForTest(
   headless: boolean,
   debugBindAddress?: string | null,
   hideWindow = false,
-  runtime?: { platform: NodeJS.Platform; waylandDisplay?: string },
+  overrides: boolean | { platform: NodeJS.Platform; waylandDisplay?: string } = false,
 ): string[] {
-  return buildChromeFlags(headless, debugBindAddress, hideWindow, runtime);
+  return typeof overrides === "boolean"
+    ? buildChromeFlags(headless, debugBindAddress, hideWindow, overrides)
+    : buildChromeFlags(headless, debugBindAddress, hideWindow, false, overrides);
 }
 
 function resolveChromeLaunchProfile(config: {
@@ -1234,8 +1357,10 @@ export function resolveChromeLaunchProfileForTest(config: {
 function resolveChromeLaunchOptions(
   chromeFlags: string[],
   usingCopiedProfile: boolean,
+  manualLogin = false,
+  platform: NodeJS.Platform = process.platform,
 ): { chromeFlags: string[]; ignoreDefaultFlags: boolean } {
-  if (!usingCopiedProfile) {
+  if (!usingCopiedProfile && !(manualLogin && platform === "darwin")) {
     return { chromeFlags, ignoreDefaultFlags: false };
   }
   return {
@@ -1249,8 +1374,10 @@ function resolveChromeLaunchOptions(
 export function resolveChromeLaunchOptionsForTest(
   chromeFlags: string[],
   usingCopiedProfile: boolean,
+  manualLogin = false,
+  platform: NodeJS.Platform = process.platform,
 ): { chromeFlags: string[]; ignoreDefaultFlags: boolean } {
-  return resolveChromeLaunchOptions(chromeFlags, usingCopiedProfile);
+  return resolveChromeLaunchOptions(chromeFlags, usingCopiedProfile, manualLogin, platform);
 }
 
 function parseDebugPortEnv(): number | null {
@@ -1261,6 +1388,21 @@ function parseDebugPortEnv(): number | null {
     return null;
   }
   return value;
+}
+
+export async function findEphemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close((error) => {
+        if (error) reject(error);
+        else if (address && typeof address === "object") resolve(address.port);
+        else reject(new Error("Failed to acquire ephemeral port"));
+      });
+    });
+  });
 }
 
 async function launchWithCustomHost({

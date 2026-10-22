@@ -13,7 +13,11 @@ import { captureAssistantMarkdown, readAssistantSnapshot } from "./actions/assis
 import { buildConversationTurnListExpression } from "./conversationTurns.js";
 import { extractStableConversationIdFromUrl } from "./conversationUrl.js";
 import { delay } from "./utils.js";
-import { connectToRemoteChromeTarget, listRemoteChromeTargets } from "./chromeLifecycle.js";
+import {
+  connectToRemoteChromeTarget,
+  listRemoteChromeTargets,
+  openBackgroundChromeWindow,
+} from "./chromeLifecycle.js";
 
 export const DEFAULT_REMOTE_CHROME_HOST = "127.0.0.1";
 export const DEFAULT_REMOTE_CHROME_PORT = 9222;
@@ -140,10 +144,17 @@ function buildTargetFingerprint(
 }
 
 function isChatGptUrl(url: string): boolean {
-  const normalized = normalizeUrl(url).toLowerCase();
-  return (
-    normalized.startsWith("https://chatgpt.com") || normalized.startsWith("https://chat.openai.com")
-  );
+  const normalized = normalizeUrl(url);
+  if (!normalized) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  return host === "chatgpt.com" || host === "chat.openai.com";
 }
 
 function isChatGptConversationUrl(url: string): boolean {
@@ -154,7 +165,7 @@ function isChatGptTarget(target: ChromeTarget): boolean {
   if (!target || target.type !== "page") {
     return false;
   }
-  return isChatGptUrl(target.url ?? "") || /chatgpt/i.test(target.title ?? "");
+  return isChatGptUrl(target.url ?? "");
 }
 
 function extractTargetId(target: ChromeTarget | undefined | null): string | null {
@@ -207,18 +218,18 @@ function buildTabInspectionExpression(): string {
       const promptReady = Boolean(promptNode);
       const turns = ${buildConversationTurnListExpression()};
       const assistantTurns = turns.filter((turn) => {
-        const role = normalize(turn.getAttribute('data-message-author-role') || turn.getAttribute('data-turn')).toLowerCase();
+        const role = normalize(turn.getAttribute('data-message-author-role') || (turn.getAttribute?.('data-content-search-unit-key') || turn.getAttribute?.('data-chatgpt-search-unit-key'))?.split(':').at(-1) || turn.getAttribute('data-turn')).toLowerCase();
         if (role === 'assistant') return true;
         return Boolean(turn.querySelector(ASSISTANT_ROLE_SELECTOR));
       });
       const fallbackUserTurns = Array.from(
-        document.querySelectorAll('[data-message-author-role="user"], [data-turn="user"]'),
+        document.querySelectorAll(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]), [data-turn="user"]'),
       );
       const userTurns = turns.filter((turn) => {
-        const role = normalize(turn.getAttribute('data-message-author-role') || turn.getAttribute('data-turn')).toLowerCase();
+        const role = normalize(turn.getAttribute('data-message-author-role') || (turn.getAttribute?.('data-content-search-unit-key') || turn.getAttribute?.('data-chatgpt-search-unit-key'))?.split(':').at(-1) || turn.getAttribute('data-turn')).toLowerCase();
         if (role === 'user') return true;
         return Boolean(
-          turn.querySelector('[data-message-author-role="user"], [data-turn="user"]'),
+          turn.querySelector(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]), [data-turn="user"]'),
         );
       });
       const answerNode = ANSWER_SELECTORS
@@ -271,9 +282,9 @@ function buildTabInspectionExpression(): string {
       const assistantCount = new Set(assistantOwners).size;
       const lastAssistantText = normalize(lastAssistantNode?.textContent);
       const lastUserText = normalize(lastUserTurn?.textContent);
-      const lastUserMessage = lastUserTurn?.matches?.('[data-message-author-role="user"]')
-        ? lastUserTurn : lastUserTurn?.querySelector?.('[data-message-author-role="user"]');
-      const userContent = lastUserMessage?.querySelectorAll?.('[class~="whitespace-pre-wrap"]');
+      const lastUserMessage = lastUserTurn?.matches?.(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])')
+        ? lastUserTurn : lastUserTurn?.querySelector?.(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])');
+      const userContent = lastUserMessage?.querySelectorAll?.('[data-user-message-bubble="true"], [class~="whitespace-pre-wrap"]');
       const authenticated = !loginButtonExists && (promptReady || sendExists || stopExists || assistantCount > 0);
       return {
         title: normalize(document.title),
@@ -290,9 +301,9 @@ function buildTabInspectionExpression(): string {
         lastAssistantTurnIndex,
         lastUserTurnIndex,
         lastUserText,
-        lastUserTextRaw: lastUserMessage?.textContent,
+        lastUserTextRaw: (lastUserMessage?.querySelector?.('[data-user-message-bubble="true"]') || lastUserMessage)?.textContent,
         lastUserContentText: userContent?.length === 1 ? userContent[0].textContent : undefined,
-        lastUserMessageId: lastUserMessage?.getAttribute?.('data-message-id'),
+        lastUserMessageId: lastUserMessage?.getAttribute?.('data-message-id') || lastUserMessage?.getAttribute?.('data-chatgpt-selection-message-id') || lastUserMessage?.getAttribute?.('data-chatgpt-search-message-ids')?.split(' ')[0] || lastUserMessage?.closest?.('[data-turn-key]')?.getAttribute?.('data-turn-key') || lastUserMessage?.getAttribute?.('data-content-search-unit-key') || lastUserMessage?.getAttribute?.('data-chatgpt-search-unit-key'),
         visibilityState: document.visibilityState,
         focused: Boolean(document.hasFocus?.()),
       };
@@ -316,7 +327,7 @@ export async function listChatGptTargets(
 }
 
 export async function openChatGptTarget(
-  options: LiveChromeEndpoint & { url?: string } = {},
+  options: LiveChromeEndpoint & { url?: string; background?: boolean } = {},
 ): Promise<string> {
   const endpoint = normalizeHostPort(options);
   const { host, port } = endpoint;
@@ -326,6 +337,7 @@ export async function openChatGptTarget(
       const connection = await connectToRemoteChromeTarget(host, port, noopLogger, {
         ...endpoint,
         targetUrl: url,
+        background: options.background,
       });
       try {
         if (!connection.targetId) throw new Error("Chrome did not return a target ID.");
@@ -334,6 +346,7 @@ export async function openChatGptTarget(
         await connection.close();
       }
     }
+    if (options.background) return await openBackgroundChromeWindow(host, port, url);
     const target = await CDP.New({ host, port, url });
     return target.id;
   } catch (error) {

@@ -24,6 +24,7 @@ import * as attachments from "../../src/browser/actions/attachments.js";
 import * as attachmentDataTransfer from "../../src/browser/actions/attachmentDataTransfer.js";
 import type { ChromeClient } from "../../src/browser/types.js";
 import { BrowserAutomationError } from "../../src/oracle/errors.js";
+import { FakeDocument, FakeElement, FakeInputElement } from "./domFixture.js";
 
 const logger = vi.fn();
 
@@ -153,6 +154,80 @@ describe("navigateToPromptReadyWithFallback", () => {
     expect(ensurePromptReadyMock).toHaveBeenNthCalledWith(1, runtime, 5_000, logger);
     expect(ensurePromptReadyMock).toHaveBeenNthCalledWith(2, runtime, 120_000, logger);
   });
+
+  class ClickableElement extends FakeElement {
+    clicks = 0;
+    click(): void {
+      this.clicks += 1;
+    }
+  }
+
+  // Runs the real dismissal expression against a fake DOM on both the initial and fallback navigation.
+  const navigateWithDom = async (children: FakeElement[]) => {
+    const document = new FakeDocument(children);
+    const window = {
+      getComputedStyle: (el: FakeElement) => ({
+        display: "block",
+        visibility: "visible",
+        opacity: el.getAttribute("data-state") === "closed" ? "0" : "1",
+      }),
+    };
+    const runtime = {
+      evaluate: vi.fn(async ({ expression }: { expression: string }) => ({
+        result: {
+          value: new Function("document", "window", "HTMLElement", `return ${expression};`)(
+            document,
+            window,
+            FakeElement,
+          ),
+        },
+      })),
+    } as unknown as ChromeClient["Runtime"];
+    await navigateToPromptReadyWithFallback(
+      {} as unknown as ChromeClient["Page"],
+      runtime,
+      {
+        url: "https://chatgpt.com/g/g-p-target/project",
+        fallbackUrl: "https://chatgpt.com/",
+        timeoutMs: 5_000,
+        headless: false,
+        logger,
+      },
+      {
+        navigateToChatGPT: vi.fn().mockResolvedValue(undefined),
+        ensureNotBlocked: vi.fn().mockResolvedValue(undefined),
+        ensurePromptReady: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("Prompt textarea did not appear before timeout"))
+          .mockResolvedValueOnce(undefined),
+      },
+    );
+  };
+
+  test("does not click sidebar conversations whose titles look like dismiss controls", async () => {
+    const closeChat = new ClickableElement("a", { href: "/c/abc" }, [], "Close test task");
+    const returnChat = new ClickableElement("a", { href: "/c/def" }, [], "Return policy draft");
+
+    await navigateWithDom([new FakeElement("nav", {}, [closeChat, returnChat])]);
+
+    expect(closeChat.clicks).toBe(0);
+    expect(returnChat.clicks).toBe(0);
+    expect(logger).not.toHaveBeenCalledWith(expect.stringContaining("dismissed blocking UI"));
+  });
+
+  test("dismisses a visible dialog but not a hidden one", async () => {
+    const hiddenOk = new ClickableElement("button", {}, [], "Got it");
+    const close = new ClickableElement("button", { "aria-label": "Close" });
+
+    await navigateWithDom([
+      new FakeElement("div", { role: "dialog", "data-state": "closed" }, [hiddenOk]),
+      new FakeElement("div", { role: "dialog" }, [close]),
+    ]);
+
+    expect(close.clicks).toBe(2);
+    expect(hiddenOk.clicks).toBe(0);
+    expect(logger).toHaveBeenCalledWith("[nav] dismissed blocking UI (close)");
+  });
 });
 
 describe("ensurePromptReady", () => {
@@ -170,6 +245,120 @@ describe("ensurePromptReady", () => {
     } as unknown as ChromeClient["Runtime"];
     await expect(ensurePromptReady(runtime, 0, logger)).rejects.toThrow(/textarea did not appear/i);
   });
+
+  const preHydrationShell = () =>
+    new FakeDocument([new FakeElement("textarea", { id: "pending-home-input" })]);
+  const hydratedComposer = () =>
+    new FakeDocument([
+      new FakeElement("form", {}, [
+        new FakeElement("div", { class: "ProseMirror", contenteditable: "true", role: "textbox" }),
+        new FakeInputElement([]),
+      ]),
+    ]);
+  const runtimeOver = (pages: Array<() => FakeDocument>) => {
+    let calls = 0;
+    const evaluate = vi.fn(async ({ expression }: { expression: string }) => {
+      const document = pages[Math.min(calls, pages.length - 1)]();
+      calls += 1;
+      try {
+        return {
+          result: {
+            value: new Function("document", `return ${expression};`)(document),
+          },
+        };
+      } catch {
+        return { result: { value: undefined } };
+      }
+    });
+    return { evaluate } as unknown as ChromeClient["Runtime"] & { evaluate: typeof evaluate };
+  };
+
+  test("does not accept ChatGPT's pre-hydration placeholder as a composer", async () => {
+    const runtime = runtimeOver([preHydrationShell]);
+    await expect(ensurePromptReady(runtime, 300, logger)).rejects.toThrow(
+      /textarea did not appear/i,
+    );
+  });
+
+  test("waits for the hydrated composer that replaces the placeholder", async () => {
+    const runtime = runtimeOver([preHydrationShell, preHydrationShell, hydratedComposer]);
+    await expect(ensurePromptReady(runtime, 5_000, logger)).resolves.toBeUndefined();
+    expect(runtime.evaluate).toHaveBeenCalledTimes(3);
+  });
+
+  const manualLoginLog = "Auth login page detected; waiting for manual login to complete...";
+
+  const locationRuntime = (href: string) => {
+    const evaluate = vi.fn(async ({ expression }: { expression: string }) => {
+      if (expression.includes("location.href")) {
+        return { result: { value: href } };
+      }
+      return { result: { value: false } };
+    });
+    return { evaluate } as unknown as ChromeClient["Runtime"];
+  };
+
+  const finishPromptWait = async (href: string) => {
+    vi.useFakeTimers();
+    try {
+      const pending = ensurePromptReady(locationRuntime(href), 0, logger);
+      const result = pending.then(
+        () => "resolved" as const,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      return await result;
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  test.each([
+    "https://notauth.openai.com/",
+    "https://auth.openai.com.evil.test/",
+    "https://foo.auth.openai.com.evil.test/",
+    "https://evilauth.openai.com/session",
+    "https://auth.openai.com@notauth.openai.com/authorize",
+    "https://notauth.openai.com:8443/authorize",
+  ])("does not extend the prompt wait for lookalike auth host %s", async (href) => {
+    const outcome = await finishPromptWait(href);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toMatch(/textarea did not appear/i);
+    expect(logger).not.toHaveBeenCalledWith(manualLoginLog);
+  });
+
+  test.each([
+    "https://auth.openai.com/authorize",
+    "https://login.auth.openai.com/authorize",
+    "https://Auth.OpenAI.com./authorize",
+    "https://chatgpt.com/log-in",
+    "https://notauth.openai.com@auth.openai.com/authorize",
+  ])("still waits for manual login on %s", async (href) => {
+    vi.useFakeTimers();
+    try {
+      const pending = ensurePromptReady(locationRuntime(href), 0, logger);
+      let settled = false;
+      const result = pending.then(
+        () => {
+          settled = true;
+          return "resolved" as const;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(logger).toHaveBeenCalledWith(manualLoginLog);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(59_000);
+      const outcome = await result;
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/textarea did not appear/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("ensureChatMode", () => {
@@ -186,6 +375,10 @@ describe("ensureChatMode", () => {
     ) {
       const tokens = new Set(classes);
       this.classList = { contains: (value: string) => tokens.has(value) };
+    }
+
+    closest(): null {
+      return null;
     }
 
     hasAttribute(name: string) {
@@ -246,11 +439,14 @@ describe("ensureChatMode", () => {
           return null;
         },
         querySelectorAll: (selector: string) => (selector === "span" ? descendants : []),
+        closest: () => null,
+        querySelector: () => null,
       }),
     );
     const document = {
+      querySelector: () => null,
       querySelectorAll: (selector: string) =>
-        selector === 'a.__menu-item[href*="/c/"]'
+        selector.includes('a.__menu-item[href*="/c/"]')
           ? historyLinks.filter((link) => link.trustedHistory)
           : [],
     };
@@ -701,6 +897,32 @@ describe("waitForResumedConversationHydration", () => {
           actualConversationId: "other-thread",
         },
       });
+      await vi.runAllTimersAsync();
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("counts current search-unit messages as stable prior turns", async () => {
+    const document = new FakeDocument([
+      new FakeElement("div", { "data-content-search-turn-key": "fallback-turn-0" }, [
+        new FakeElement("div", { "data-content-search-unit-key": "fallback-turn-0:0:user" }),
+        new FakeElement("div", { "data-content-search-unit-key": "fallback-turn-0:2:assistant" }),
+      ]),
+    ]);
+    vi.useFakeTimers();
+    try {
+      const runtime = {
+        evaluate: vi.fn(async ({ expression }: { expression: string }) => ({
+          result: { value: new Function("document", `return ${expression};`)(document) },
+        })),
+      } as unknown as ChromeClient["Runtime"];
+      const promise = waitForResumedConversationHydration(runtime, 5_000, logger, {
+        requirePriorTurns: true,
+        requirePromptReady: false,
+      });
+      const assertion = expect(promise).resolves.toBe(2);
       await vi.runAllTimersAsync();
       await assertion;
     } finally {
@@ -1694,6 +1916,47 @@ describe("waitForAssistantResponse", () => {
     }
   });
 
+  test("does not finish a stable action bar when the thinking read fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const answer = {
+        text: "The answer is still being reasoned about in the sidecar.",
+        html: "<p>The answer is still being reasoned about in the sidecar.</p>",
+        messageId: "mid",
+        turnId: "tid",
+      };
+      const evaluate = vi
+        .fn()
+        .mockImplementation(async (params: { expression?: string; awaitPromise?: boolean }) => {
+          if (params.awaitPromise) {
+            return { result: { type: "object", value: answer } };
+          }
+          const expression = String(params.expression ?? "");
+          if (expression.includes("extractAssistantTurn")) {
+            return { result: { value: answer } };
+          }
+          if (expression.includes("return readThinkingActivity()")) {
+            throw new Error("thinking evaluate failed");
+          }
+          if (expression.includes("Find the LAST assistant turn")) {
+            return { result: { value: true } };
+          }
+          return { result: { value: false } };
+        });
+
+      const promise = waitForAssistantResponse(
+        { evaluate } as unknown as ChromeClient["Runtime"],
+        6_000,
+        logger,
+      );
+      const assertion = expect(promise).rejects.toThrow(/refusing to finalize/i);
+      await vi.advanceTimersByTimeAsync(7_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("keeps a legitimate short completion after watchdog confirmation", async () => {
     vi.useFakeTimers();
     try {
@@ -1743,7 +2006,9 @@ describe("waitForAssistantResponse", () => {
     expect(capturedExpression).toContain("characterData: true");
     expect(capturedExpression).toContain("copy-turn-action-button");
     expect(capturedExpression).toContain("isLastAssistantTurnFinished");
-    expect(capturedExpression).toContain("lastAssistantTurn.querySelector(FINISHED_SELECTOR)");
+    expect(capturedExpression).toContain(
+      "findTurnAction(lastAssistantTurn, FINISHED_SELECTOR, FINISHED_SELECTOR)",
+    );
     expect(capturedExpression).not.toContain("document.querySelector(FINISHED_SELECTOR)");
     expect(capturedExpression).toContain("lastAssistantTurn.querySelectorAll('.markdown')");
     expect(capturedExpression).not.toContain("document.querySelectorAll('.markdown')");
@@ -1782,6 +2047,130 @@ describe("waitForAssistantResponse", () => {
     expect(result.text).toBe("Recovered assistant response.");
     expect(evaluate).toHaveBeenCalled();
   });
+
+  test("does not spend a second full timeout after the response observer times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const evaluate = vi.fn().mockImplementation((params: { awaitPromise?: boolean }) => {
+        if (params?.awaitPromise) {
+          return new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error("Response timeout")), 1_500);
+          });
+        }
+        return Promise.resolve({ result: { value: null } });
+      });
+      let outcome:
+        | { status: "pending" }
+        | { status: "rejected"; message: string }
+        | { status: "resolved" } = { status: "pending" };
+      const tracked = waitForAssistantResponse(
+        { evaluate } as unknown as ChromeClient["Runtime"],
+        2_000,
+        logger,
+      ).then(
+        () => {
+          outcome = { status: "resolved" };
+        },
+        (error: unknown) => {
+          outcome = {
+            status: "rejected",
+            message: error instanceof Error ? error.message : String(error),
+          };
+        },
+      );
+      await vi.advanceTimersByTimeAsync(2_600);
+      expect(outcome).toEqual({ status: "rejected", message: "Response timeout" });
+      await tracked;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not finish a streaming answer just because its html contains an estuary file URL", async () => {
+    vi.useFakeTimers();
+    try {
+      const streaming = {
+        text: "Here is the chart so far.",
+        html: '<p>Here is the chart so far.</p><img src="https://chatgpt.com/backend-api/estuary/content?id=file_abc">',
+        messageId: "mid",
+        turnId: "tid",
+      };
+      const evaluate = vi
+        .fn()
+        .mockImplementation(async (params: { expression?: string; awaitPromise?: boolean }) => {
+          if (params.awaitPromise) {
+            return { result: { type: "object", value: streaming } };
+          }
+          const expression = String(params.expression ?? "");
+          if (expression.includes("extractAssistantTurn")) {
+            return { result: { value: streaming } };
+          }
+          if (expression.includes("Find the LAST assistant turn")) {
+            return { result: { value: false } };
+          }
+          return { result: { value: false } };
+        });
+      let outcome: "pending" | "resolved" | "rejected" = "pending";
+      const tracked = waitForAssistantResponse(
+        { evaluate } as unknown as ChromeClient["Runtime"],
+        2_000,
+        logger,
+      ).then(
+        () => {
+          outcome = "resolved";
+        },
+        () => {
+          outcome = "rejected";
+        },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(outcome).toBe("pending");
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(outcome).toBe("rejected");
+      await tracked;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test.each(["Generated image.", "Generated 3 images."])(
+    "still accepts an image-only extractor result %j without an action bar",
+    async (text) => {
+      vi.useFakeTimers();
+      try {
+        const imageOnly = {
+          text,
+          html: '<img src="https://chatgpt.com/backend-api/estuary/content?id=file_abc">',
+          messageId: "mid",
+          turnId: "tid",
+        };
+        const evaluate = vi
+          .fn()
+          .mockImplementation(async (params: { expression?: string; awaitPromise?: boolean }) => {
+            if (params.awaitPromise) {
+              return { result: { type: "object", value: imageOnly } };
+            }
+            const expression = String(params.expression ?? "");
+            if (expression.includes("extractAssistantTurn")) {
+              return { result: { value: imageOnly } };
+            }
+            if (expression.includes("Find the LAST assistant turn")) {
+              return { result: { value: false } };
+            }
+            return { result: { value: false } };
+          });
+        const promise = waitForAssistantResponse(
+          { evaluate } as unknown as ChromeClient["Runtime"],
+          5_000,
+          logger,
+        );
+        await vi.advanceTimersByTimeAsync(2_000);
+        await expect(promise).resolves.toMatchObject({ text });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe("composer attachment menu safety", () => {

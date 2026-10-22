@@ -51,6 +51,8 @@ export interface BrowserExecutionResult {
   answerText: string;
   artifacts?: SessionArtifact[];
   savedFiles?: SavedBrowserFile[];
+  /** The no-focus setting a remote host ran with; local runs leave it unset. */
+  noFocus?: boolean;
 }
 
 interface RunBrowserSessionArgs {
@@ -279,7 +281,7 @@ async function executeAssembledBrowserSession({
     if (typeof message !== "string") return;
     const shouldAlwaysPrint =
       message.startsWith("[browser] ") &&
-      /archive|fallback|follow-up|retry|thinking|research|waiting for chatgpt|remote debugging approval|browser slot|browser control|browser guidance|model selection|model picker/i.test(
+      /archive|fallback|follow-up|retry|thinking|research|manual login|waiting for chatgpt|remote debugging approval|browser slot|browser control|browser guidance|model selection|model picker/i.test(
         message,
       );
     if (!runOptions.verbose && !shouldAlwaysPrint) return;
@@ -444,6 +446,7 @@ async function executeAssembledBrowserSession({
     answerText,
     artifacts: savedArtifacts,
     savedFiles: browserResult.savedFiles,
+    noFocus: browserResult.noFocus,
   };
 }
 

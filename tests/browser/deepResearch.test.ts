@@ -27,6 +27,7 @@ import {
   checkDeepResearchStatus,
 } from "../../src/browser/actions/deepResearch.js";
 import type { BrowserLogger } from "../../src/browser/types.js";
+import { FakeDocument, FakeElement } from "./domFixture.js";
 
 function createMockRuntime() {
   return {
@@ -1643,6 +1644,89 @@ describe("waitForDeepResearchCompletion", () => {
     );
   });
 
+  it("does not accept a completed Deep Research iframe when the owner turn is unknown", async () => {
+    mockRuntime.evaluate.mockResolvedValue({
+      result: {
+        value: {
+          finished: false,
+          stopVisible: false,
+          textLength: 0,
+          hasIframe: true,
+          hasActiveScopedResearch: false,
+        },
+      },
+    });
+
+    const listeners = new Map<string, (params: unknown, sessionId?: string) => void>();
+    const deepResearchUrl =
+      "https://connector_openai_deep_research.web-sandbox.oaiusercontent.com/";
+    const foreignReport = "FOREIGN_REPORT https://example.com/other";
+    const mockClient = {
+      oraclePageSessionId: "page-session",
+      on: vi.fn((event: string, listener: (params: unknown, sessionId?: string) => void) => {
+        listeners.set(event, listener);
+      }),
+      removeListener: vi.fn(),
+      send: vi.fn(async (method: string, params?: unknown, sessionId?: string) => {
+        if (method === "Target.setAutoAttach" && (params as { autoAttach?: boolean })?.autoAttach) {
+          listeners.get("Target.attachedToTarget")?.(
+            {
+              sessionId: "foreign-session",
+              targetInfo: {
+                targetId: "foreign-target",
+                type: "iframe",
+                url: deepResearchUrl,
+              },
+            },
+            "page-session",
+          );
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          return {
+            frameTree: {
+              frame: { id: `${sessionId}-frame`, name: "root", url: deepResearchUrl },
+            },
+          };
+        }
+        if (method === "Runtime.evaluate" && sessionId === "foreign-session") {
+          return {
+            result: {
+              value: {
+                completed: true,
+                inProgress: false,
+                textLength: foreignReport.length,
+                text: foreignReport,
+              },
+            },
+          };
+        }
+        return {};
+      }),
+    };
+
+    let nowCalls = 0;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      nowCalls += 1;
+      return nowCalls < 12 ? 1_000 : 2_000;
+    });
+    try {
+      await expect(
+        waitForDeepResearchCompletion(
+          mockRuntime as never,
+          mockLogger,
+          100,
+          null,
+          undefined,
+          mockClient as never,
+          { requireScopedTargetOwner: true },
+        ),
+      ).rejects.toThrow(/did not complete/);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("prefers a completed page target over an earlier in-progress one", async () => {
     // A page can expose more than one Deep Research iframe target (e.g. a stale
     // in-progress one attached before the completed report). Scanning must not
@@ -2165,7 +2249,7 @@ describe("waitForDeepResearchCompletion", () => {
         querySelector: () => null,
         querySelectorAll: (selector: string) => {
           if (selector === "iframe") return [];
-          if (selector === '[data-message-author-role="assistant"]') {
+          if (selector.includes('[data-message-author-role="assistant"]')) {
             return [priorFinishedTurn];
           }
           return [];
@@ -2176,6 +2260,44 @@ describe("waitForDeepResearchCompletion", () => {
     expect(result.finished).toBe(false);
     expect(result.textLength).toBe(0);
     expect(result.isToolStub).toBe(false);
+  });
+
+  it("does not treat a copy bar as finished while Stop is showing", () => {
+    const expression = buildDeepResearchCompletionPollExpressionForTest();
+    const report =
+      "Partial Deep Research report that already has a copy control while Stop is still showing.";
+    const assistantTurn = {
+      textContent: report,
+      innerText: report,
+      dataset: {},
+      getAttribute: (name: string) => (name === "data-message-author-role" ? "assistant" : null),
+      querySelector: () => ({}),
+      querySelectorAll: () => [],
+    };
+    const run = (stopPresent: boolean) =>
+      new vm.Script(expression).runInNewContext({
+        document: {
+          body: { innerText: report },
+          querySelector: (selector: string) =>
+            stopPresent && selector.includes("stop-button") ? {} : null,
+          querySelectorAll: (selector: string) => {
+            if (selector === "iframe") return [];
+            if (selector.includes("data-message-author-role") || selector.includes("data-turn")) {
+              return [assistantTurn];
+            }
+            return [];
+          },
+        },
+      }) as { finished?: boolean; stopVisible?: boolean; textLength?: number };
+
+    const whileStopping = run(true);
+    expect(whileStopping.stopVisible).toBe(true);
+    expect(whileStopping.textLength).toBeGreaterThanOrEqual(40);
+    expect(whileStopping.finished).toBe(false);
+
+    const afterStop = run(false);
+    expect(afterStop.stopVisible).toBe(false);
+    expect(afterStop.finished).toBe(true);
   });
 
   it("throws on timeout with metadata", async () => {
@@ -2190,6 +2312,59 @@ describe("waitForDeepResearchCompletion", () => {
     await expect(
       waitForDeepResearchCompletion(mockRuntime as never, mockLogger, 100),
     ).rejects.toThrow(/did not complete/);
+  });
+});
+
+describe.each([
+  ["status", buildDeepResearchStatusExpressionForTest, "completed"],
+  ["completion poll", buildDeepResearchCompletionPollExpressionForTest, "finished"],
+] as const)("localized Deep Research %s controls", (_name, buildExpression, completionKey) => {
+  function evaluateControl(control: FakeElement) {
+    const document = new FakeDocument([
+      new FakeElement("div", { "data-talvt-turn-state": "streaming" }, [
+        new FakeElement("div", { "data-content-search-unit-key": "synthetic:assistant" }, [
+          new FakeElement(
+            "p",
+            {},
+            [],
+            "A synthetic research response long enough to pass the minimum text-length gate.",
+          ),
+          control,
+        ]),
+      ]),
+    ]);
+    return new vm.Script(buildExpression()).runInNewContext({ document }) as Record<
+      string,
+      boolean | number
+    >;
+  }
+
+  describe.each(["Copy", "コピーする", "复制"])("%s", (label) => {
+    it.each([
+      ["pre", {}],
+      ["code", {}],
+      ["div", { "data-user-message-bubble": "" }],
+      ["div", { "data-message-author-role": "user" }],
+      ["div", { "data-content-search-unit-key": "synthetic:user" }],
+      ["div", { "data-chatgpt-search-unit-key": "synthetic:user" }],
+    ] as const)("ignores a copy control inside %s %j without Stop", (tag, attributes) => {
+      const result = evaluateControl(
+        new FakeElement(tag, attributes, [
+          new FakeElement("span", {}, [new FakeElement("button", { "aria-label": label })]),
+        ]),
+      );
+
+      expect(result.textLength).toBeGreaterThanOrEqual(40);
+      expect(result[completionKey]).toBe(false);
+    });
+
+    it("recognizes a turn-level copy control without the legacy action-bar class", () => {
+      const result = evaluateControl(
+        new FakeElement("div", {}, [new FakeElement("button", { "aria-label": label })]),
+      );
+
+      expect(result[completionKey]).toBe(true);
+    });
   });
 });
 
@@ -2255,7 +2430,7 @@ describe("checkDeepResearchStatus", () => {
         querySelector: (selector: string) => (selector.includes("copy") ? {} : null),
         querySelectorAll: (selector: string) => {
           if (selector === "iframe") return [];
-          if (selector === '[data-message-author-role="assistant"]') return [assistantTurn];
+          if (selector.includes('[data-message-author-role="assistant"]')) return [assistantTurn];
           return [];
         },
       },
@@ -2428,7 +2603,7 @@ describe("checkDeepResearchStatus", () => {
         querySelector: (selector: string) => (selector.includes("copy") ? {} : null),
         querySelectorAll: (selector: string) => {
           if (selector === "iframe") return [];
-          if (selector === '[data-message-author-role="assistant"]') {
+          if (selector.includes('[data-message-author-role="assistant"]')) {
             return [priorFinishedTurn, currentResearchTurn];
           }
           return [];

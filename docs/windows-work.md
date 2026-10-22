@@ -14,7 +14,12 @@ Read this file whenever you're working from Windows and add new findings so the 
 
 Future Windows gotchas belong here. Update this doc when you learn something new.
 
+- Chinese ChatGPT can announce `回答已完成` and place localized copy controls outside the search unit inside a `data-talvt-turn-state` wrapper. Completion and Markdown capture must scope those controls to the current assistant exchange. Keep user-message and code-block exclusions in the shared selector too: Deep Research queries it directly without the ordinary turn-action locator's guards.
+
+- Run focused Vitest suites with `node node_modules/vitest/vitest.mjs run ...` if the package-manager command cannot resolve the Windows executable shim in an automation environment.
+
 - Tab-lease tests run real PowerShell process-identity probes (up to five seconds each). Their Windows test budget must cover multiple probes and registry cleanup. Failed self-identity probes are retried on the next lookup; only a successful identity is cached for the controller lifetime.
+- Final shared Chrome cleanup retries an unavailable process-command query once. A failed CIM read is not a verified profile mismatch; an actual mismatch or two unavailable reads still leave the process untouched.
 
 - Detached-worker proofs must wait for the worker PID to exit before deleting its temporary working directory. Sending SIGTERM alone races Windows handle release and can fail cleanup with EBUSY; use a bounded exit wait and bounded filesystem retries without skipping the lifecycle assertions.
 
@@ -26,6 +31,7 @@ Future Windows gotchas belong here. Update this doc when you learn something new
 - `scripts/browser-tools.ts` may attach its "active page" command to an `about:blank` target when several DevTools targets exist. For signed-in evidence, select the exact target id recorded by the Oracle session and verify its URL and composer state directly.
 
 - Shared manual-login Chrome is detached from its native Windows controller and launched with `windowsHide`; temporary and copied profiles retain their existing process lifecycle. The final verified lease owner terminates the matching Chrome PID/profile.
+- Unit tests that mock only chrome-launcher's `launch()` must explicitly disable the Windows default `manualLogin` mode. Shared profiles use `new Launcher()`; cover that path with the dedicated lifecycle proof instead of accidentally launching Chrome from an option-construction test.
 - After upgrading this lease protocol, restart all Oracle browser controllers before sharing a profile. Older live controllers can forcibly remove a registry lock after their timeout; stored legacy records remain readable, but simultaneous mixed-version controllers are not a safe upgrade path.
 - Run `node scripts/shared-chrome-lifecycle-proof.mjs` after building for the native two-controller check. It uses a freshly initialized, signed-out profile and locally supplied pages, verifies peer CDP access after the owner exits, then checks final registry/process/endpoint cleanup. It does not prove signed-in ChatGPT concurrency or backend model identity.
 

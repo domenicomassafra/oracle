@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { scopeSessionPathOption } from "../src/cli/sessionPathParsing.js";
 import "dotenv/config";
 import { fileURLToPath } from "node:url";
 import { Command, Option } from "commander";
@@ -155,6 +156,7 @@ interface CliOptions extends OptionValues {
   browserInlineCookies?: string;
   browserHeadless?: boolean;
   browserHideWindow?: boolean;
+  browserNoFocus?: boolean;
   browserKeepBrowser?: boolean;
   browserTab?: string;
   browserModelStrategy?: "select" | "current" | "ignore";
@@ -360,8 +362,8 @@ program.hook("preAction", (_thisCommand, actionCommand) => {
   introPrinted = true;
 });
 applyHelpStyling(program, VERSION, isTty);
-program.hook("preAction", async (thisCommand) => {
-  if (thisCommand !== program) {
+program.hook("preAction", async (thisCommand, actionCommand) => {
+  if (actionCommand !== program) {
     return;
   }
   if (routingCliArgs.some((arg) => arg === "--help" || arg === "-h")) {
@@ -825,6 +827,18 @@ program
     ).hideHelp(),
   )
   .addOption(
+    new Option(
+      "--browser-no-focus",
+      "Keep the automation Chrome in the background during launch, new tabs, and send (a reattach that falls back to relaunching Chrome can still activate it).",
+    ).hideHelp(),
+  )
+  .addOption(
+    new Option(
+      "--no-browser-no-focus",
+      "Let Chrome come to the front during launch, new tabs, and send, as before (same as browser.noFocus: false).",
+    ).hideHelp(),
+  )
+  .addOption(
     new Option("--browser-keep-browser", "Keep Chrome running after completion.").hideHelp(),
   )
   .addOption(
@@ -1031,8 +1045,9 @@ program
     const { serveRemote } = await import("../src/remote/server.js");
     const { buildServeBrowserConfig } = await import("../src/cli/serveBrowserConfig.js");
     const { config } = await loadUserConfig();
+    const programOptions = program.opts<CliOptions>();
     await serveRemote({
-      browserConfig: buildServeBrowserConfig(program.opts<CliOptions>(), config),
+      browserConfig: buildServeBrowserConfig(programOptions, config),
       host: commandOptions.host,
       port: commandOptions.port,
       token: commandOptions.token,
@@ -1047,7 +1062,9 @@ program
           : Number(commandOptions.maxQueuedRuns),
       manualLoginDefault: commandOptions.manualLogin,
       manualLoginProfileDir: commandOptions.manualLoginProfileDir,
-      cookieSyncDefault: commandOptions.browserCookieSync,
+      cookieSyncDefault: Boolean(
+        commandOptions.browserCookieSync || programOptions.browserCookieSync,
+      ),
     });
   });
 
@@ -1132,7 +1149,7 @@ bridgeCommand
   .command("host")
   .description("Start a secure oracle serve host (optionally with an SSH reverse tunnel).")
   .option("--bind <host:port>", "Local bind address for the host service (default 127.0.0.1:9473).")
-  .option("--token <token|auto>", "Service access token (default auto).", "auto")
+  .option("--token <token|auto>", "Service access token (default auto).")
   .option(
     "--write-connection <path>",
     "Write a connection artifact JSON (default ~/.oracle/bridge-connection.json).",
@@ -1147,11 +1164,12 @@ bridgeCommand
   .option("--ssh-extra-args <args>", "Extra args passed to ssh (quoted string).")
   .option("--background", "Run the host in the background and write pid/log files.", false)
   .option("--foreground", "Run the host in the foreground (default).", false)
+  .addOption(new Option("--respawn").hideHelp())
   .option("--print", "Print the client connection string (includes token).", false)
   .option("--print-token", "Print only the token.", false)
-  .action(async (commandOptions) => {
+  .action(async (_commandOptions, command: Command) => {
     const { runBridgeHost } = await import("../src/cli/bridge/host.js");
-    await runBridgeHost(commandOptions);
+    await runBridgeHost(command.optsWithGlobals());
   });
 
 bridgeCommand
@@ -1326,7 +1344,10 @@ program
   )
   .addOption(new Option("--clean", "Deprecated alias for --clear.").default(false).hideHelp())
   .action(async (sessionId: string | undefined, _options: StatusOptions, command: Command) => {
-    const statusOptions = command.opts<StatusOptions>();
+    const statusOptions = command.optsWithGlobals<StatusOptions>();
+    if (statusOptions.verboseRender) {
+      process.env.ORACLE_VERBOSE_RENDER = "1";
+    }
     if (statusOptions.browserTabs) {
       if (sessionId) {
         console.error(
@@ -1364,16 +1385,20 @@ program
       return;
     }
     if (sessionId) {
-      const autoRender =
-        !command.getOptionValueSource?.("render") &&
-        !command.getOptionValueSource?.("renderMarkdown")
-          ? process.stdout.isTTY
-          : false;
-      const renderMarkdown = Boolean(
-        statusOptions.render || statusOptions.renderMarkdown || autoRender,
-      );
+      const renderRequested = Boolean(statusOptions.render || statusOptions.renderMarkdown);
+      const autoRender = !renderRequested && process.stdout.isTTY;
+      const renderMarkdown = Boolean(renderRequested || autoRender);
+      const { listIgnoredFlags } = await import("../src/cli/sessionCommand.js");
+      const ignoredFlags = listIgnoredFlags(command);
+      if (ignoredFlags.length > 0) {
+        console.log(`Ignoring flags on session attach: ${ignoredFlags.join(", ")}`);
+      }
       const { attachSession } = await import("../src/cli/sessionDisplay.js");
-      await attachSession(sessionId, { renderMarkdown, renderPrompt: !statusOptions.hidePrompt });
+      await attachSession(sessionId, {
+        renderMarkdown,
+        renderPrompt: !statusOptions.hidePrompt,
+        model: statusOptions.model,
+      });
       return;
     }
     const showExamples = usesDefaultStatusFilters(command);
@@ -1383,6 +1408,7 @@ program
       includeAll: statusOptions.all,
       limit: statusOptions.limit,
       showExamples,
+      modelFilter: statusOptions.model,
     });
   });
 
@@ -2103,19 +2129,35 @@ async function runRootCommand(options: CliOptions): Promise<void> {
   resolvedOptions.provider = providerMode;
   resolvedOptions.writeOutputPath = resolveOutputPath(options.writeOutput, process.cwd());
 
+  // Only a user-typed --model narrows these views; configured defaults must not
+  // silently filter legacy session/status lookups.
+  const explicitModelFilter =
+    program.getOptionValueSource("model") === "cli" ? options.model : undefined;
   if (options.status) {
+    if (options.verboseRender) {
+      process.env.ORACLE_VERBOSE_RENDER = "1";
+    }
     const { attachSession, showStatus } = await import("../src/cli/sessionDisplay.js");
     if (options.session) {
-      await attachSession(options.session);
+      await attachSession(options.session, { model: explicitModelFilter, renderMarkdown });
     } else {
-      await showStatus({ hours: 24, includeAll: false, limit: 100, showExamples: true });
+      await showStatus({
+        hours: 24,
+        includeAll: false,
+        limit: 100,
+        showExamples: true,
+        modelFilter: explicitModelFilter,
+      });
     }
     return;
   }
 
   if (options.session) {
+    if (options.verboseRender) {
+      process.env.ORACLE_VERBOSE_RENDER = "1";
+    }
     const { attachSession } = await import("../src/cli/sessionDisplay.js");
-    await attachSession(options.session);
+    await attachSession(options.session, { model: explicitModelFilter, renderMarkdown });
     return;
   }
 
@@ -2999,8 +3041,16 @@ function printDebugHelp(cliName: string): void {
       "Attach to your current Chrome session through its local remote debugging toggle.",
     ],
     ["--browser-url <url>", "Alias for --chatgpt-url."],
+    [
+      "--browser-thinking-time <level>",
+      "Thinking time: light, standard, extended, extra-high, pro, or heavy.",
+    ],
     ["--browser-timeout <ms|s|m>", "Cap total wait time for the assistant response."],
     ["--browser-input-timeout <ms|s|m>", "Cap how long we wait for the composer textarea."],
+    [
+      "--browser-attachment-timeout <ms|s|m>",
+      "Cap how long we wait for attachments to be ready before sending.",
+    ],
     [
       "--browser-recheck-delay <ms|s|m|h>",
       "After timeout, wait then revisit the conversation to retry capture.",
@@ -3015,6 +3065,10 @@ function printDebugHelp(cliName: string): void {
       "Wait for the manual-login profile lock before sending.",
     ],
     [
+      "--browser-max-concurrent-tabs <n>",
+      "Soft limit for parallel tabs sharing one manual-login profile (default 3).",
+    ],
+    [
       "--browser-auto-reattach-delay <ms|s|m|h>",
       "Delay before periodic auto-reattach attempts after a timeout.",
     ],
@@ -3027,17 +3081,30 @@ function printDebugHelp(cliName: string): void {
       "--browser-cookie-wait <ms|s|m>",
       "Wait before retrying cookie sync when Chrome cookies are empty or locked.",
     ],
+    ["--browser-cookie-names <names>", "Comma-separated cookie allowlist for sync."],
+    [
+      "--browser-inline-cookies <jsonOrBase64>",
+      "Use an inline cookie payload (JSON array or base64 JSON).",
+    ],
+    ["--browser-inline-cookies-file <path>", "Load the inline cookie payload from a file."],
     [
       "--browser-cookie-sync",
       "Copy cookies from live Chrome (opt-in; token rotation may invalidate that session).",
     ],
     ["--browser-no-cookie-sync", "Skip copying cookies from your main profile."],
+    ["--browser-allow-cookie-errors", "Continue even if Chrome cookies cannot be copied."],
     [
       "--browser-manual-login",
       "Skip cookie copy; reuse a persistent automation profile and log in manually.",
     ],
+    [
+      "--browser-manual-login-profile-dir <path>",
+      "Persistent Chrome profile directory for manual-login runs.",
+    ],
     ["--browser-headless", "Launch Chrome in headless mode."],
     ["--browser-hide-window", "Hide the Chrome window (macOS headful only)."],
+    ["--browser-no-focus", "Keep Chrome in the background during launch, new tabs, and send."],
+    ["--no-browser-no-focus", "Let Chrome come to the front during launch, new tabs, and send."],
     ["--browser-keep-browser", "Leave Chrome running after completion."],
   ]);
   console.log("");
@@ -3123,7 +3190,10 @@ async function main(): Promise<void> {
   };
   process.once("SIGINT", handleSigint);
   try {
-    await program.parseAsync(normalizedArgv);
+    await program.parseAsync([
+      ...normalizedArgv.slice(0, 2),
+      ...scopeSessionPathOption(program, normalizedArgv.slice(2)),
+    ]);
   } finally {
     process.off("SIGINT", handleSigint);
   }

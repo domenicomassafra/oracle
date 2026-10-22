@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const cdp = vi.hoisted(() => Object.assign(vi.fn(), { List: vi.fn(), New: vi.fn() }));
+const cdp = vi.hoisted(() =>
+  Object.assign(vi.fn(), { List: vi.fn(), New: vi.fn(), Version: vi.fn() }),
+);
 vi.mock("chrome-remote-interface", () => ({ default: cdp }));
 let inspectChatGptTab: (typeof import("../../src/browser/liveTabs.js"))["inspectChatGptTab"];
 let listChatGptTargets: (typeof import("../../src/browser/liveTabs.js"))["listChatGptTargets"];
@@ -68,6 +70,72 @@ describe("live tab transport", () => {
     expect(browser.Target.getTargets).toHaveBeenCalledOnce();
   });
 
+  test("keeps only https tabs on chatgpt.com or chat.openai.com", async () => {
+    cdp.List.mockRejectedValue(new Error());
+    const browser = browserClient();
+    browser.Target.getTargets.mockResolvedValue({
+      targetInfos: [
+        {
+          targetId: "real",
+          type: "page",
+          title: "Saved answer",
+          url: "https://chatgpt.com/c/saved",
+        },
+        {
+          targetId: "legacy",
+          type: "page",
+          title: "Old chat",
+          url: "https://chat.openai.com/c/legacy",
+        },
+        {
+          targetId: "lookalike",
+          type: "page",
+          title: "ChatGPT",
+          url: "https://chatgpt.com.evil.example/c/1",
+        },
+        {
+          targetId: "title-only",
+          type: "page",
+          title: "ChatGPT",
+          url: "https://example.com/inbox",
+        },
+        {
+          targetId: "cleartext",
+          type: "page",
+          title: "ChatGPT",
+          url: "http://chatgpt.com/c/1",
+        },
+        {
+          targetId: "userinfo",
+          type: "page",
+          title: "ChatGPT",
+          url: "https://chatgpt.com@evil.example/",
+        },
+        {
+          targetId: "blank",
+          type: "page",
+          title: "ChatGPT",
+          url: "about:blank",
+        },
+      ],
+    });
+    cdp.mockResolvedValue(browser);
+    expect(await listChatGptTargets(endpoint)).toEqual([
+      {
+        targetId: "real",
+        type: "page",
+        title: "Saved answer",
+        url: "https://chatgpt.com/c/saved",
+      },
+      {
+        targetId: "legacy",
+        type: "page",
+        title: "Old chat",
+        url: "https://chat.openai.com/c/legacy",
+      },
+    ]);
+  });
+
   test("reports endpoint and recovery guidance for an empty discovery error", async () => {
     cdp.List.mockRejectedValue(new Error());
     await expect(listChatGptTargets({ host: "127.0.0.1", port: 9222 })).rejects.toThrow(
@@ -124,5 +192,50 @@ describe("live tab transport", () => {
     expect(cdp.New).not.toHaveBeenCalled();
     expect(browser.Target.detachFromTarget).toHaveBeenCalledWith({ sessionId: "session" });
     expect(browser.Target.closeTarget).not.toHaveBeenCalled();
+  });
+
+  test("reopens saved conversations in a background window when asked", async () => {
+    const browser = browserClient();
+    cdp.mockResolvedValue(browser);
+    expect(
+      await openChatGptTarget({
+        ...endpoint,
+        url: "https://chatgpt.com/c/saved",
+        background: true,
+      }),
+    ).toBe("recovered");
+    expect(browser.Target.createTarget).toHaveBeenCalledWith({
+      url: "https://chatgpt.com/c/saved",
+      background: true,
+      newWindow: true,
+    });
+    expect(cdp.New).not.toHaveBeenCalled();
+  });
+
+  test("reopens through an HTTP endpoint in a background window instead of /json/new", async () => {
+    const browser = browserClient();
+    cdp.Version.mockResolvedValue({
+      webSocketDebuggerUrl: "ws://0.0.0.0:9222/devtools/browser/http-fixture",
+    });
+    cdp.mockResolvedValue(browser);
+    expect(
+      await openChatGptTarget({
+        host: "127.0.0.1",
+        port: 9333,
+        url: "https://chatgpt.com/c/saved",
+        background: true,
+      }),
+    ).toBe("recovered");
+    expect(cdp.Version).toHaveBeenCalledWith({ host: "127.0.0.1", port: 9333 });
+    expect(cdp).toHaveBeenCalledWith({
+      target: "ws://127.0.0.1:9333/devtools/browser/http-fixture",
+      local: true,
+    });
+    expect(browser.Target.createTarget).toHaveBeenCalledWith({
+      url: "https://chatgpt.com/c/saved",
+      background: true,
+      newWindow: true,
+    });
+    expect(cdp.New).not.toHaveBeenCalled();
   });
 });

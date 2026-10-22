@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import http from "node:http";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -166,6 +166,49 @@ describe("remote browser service", () => {
         });
         expect(result.answerText).toBe("host-route");
         expect(observed).toBe(true);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  test.skipIf(!CAN_LISTEN_LOCALHOST).each([true, false])(
+    "applies the host's no-focus setting and ignores the client's (host noFocus=%s)",
+    async (hostNoFocus) => {
+      let observed: boolean | undefined;
+      const server = await createRemoteServer(
+        {
+          host: "127.0.0.1",
+          port: 0,
+          token: "test-host-no-focus",
+          logger: () => {},
+          browserConfig: { attachRunning: false, approvalWaitMs: 20_000, noFocus: hostNoFocus },
+        },
+        {
+          runBrowser: async (options) => {
+            observed = options.config?.noFocus;
+            return {
+              answerText: "no-focus",
+              answerMarkdown: "no-focus",
+              tookMs: 1,
+              answerTokens: 1,
+              answerChars: 8,
+            };
+          },
+        },
+      );
+      try {
+        const execute = createRemoteBrowserExecutor({
+          host: `127.0.0.1:${server.port}`,
+          token: "test-host-no-focus",
+        });
+        const result = await execute({
+          prompt: "window policy",
+          config: { noFocus: !hostNoFocus },
+        });
+        expect(observed).toBe(hostNoFocus);
+        // Reported back so the client's session records what the host ran with.
+        expect(result.noFocus).toBe(hostNoFocus);
       } finally {
         await server.close();
       }
@@ -1345,6 +1388,7 @@ describe("bridge concurrency end to end", () => {
       let active = 0;
       let peakActive = 0;
       const finish: (() => void)[] = [];
+      const controller = new AbortController();
       const server = await createRemoteServer(
         {
           host: "127.0.0.1",
@@ -1355,10 +1399,14 @@ describe("bridge concurrency end to end", () => {
           maxQueuedRuns: 4,
         },
         {
-          runBrowser: async () => {
+          runBrowser: async (options) => {
             active += 1;
             peakActive = Math.max(peakActive, active);
-            await new Promise<void>((resolve) => finish.push(resolve));
+            await new Promise<void>((resolve) => {
+              finish.push(resolve);
+              if (options.signal?.aborted) resolve();
+              else options.signal?.addEventListener("abort", () => resolve(), { once: true });
+            });
             active -= 1;
             return {
               answerText: "ok",
@@ -1376,25 +1424,42 @@ describe("bridge concurrency end to end", () => {
           host: `127.0.0.1:${server.port}`,
           token: "secret",
         });
-        return executor({ prompt: "x", config: {} });
+        return executor({ prompt: "x", config: {}, signal: controller.signal });
       };
 
       const runs = [call(), call(), call()];
-      // Give all three time to arrive; only two may be inside runBrowser.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(active).toBe(2);
-      expect(peakActive).toBe(2);
+      const settled = Promise.allSettled(runs);
+      try {
+        await vi.waitFor(
+          async () => {
+            expect(finish).toHaveLength(2);
+            const response = await fetch(`http://127.0.0.1:${server.port}/health`, {
+              headers: { Authorization: "Bearer secret" },
+              signal: controller.signal,
+            });
+            expect(await response.json()).toMatchObject({ activeRuns: 2, queuedRuns: 1 });
+          },
+          { timeout: 10_000 },
+        );
+        expect(active).toBe(2);
+        expect(peakActive).toBe(2);
 
-      while (finish.length > 0) {
         finish.shift()?.();
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        // Admission can follow slow session writes; a fixed sleep can leave the third run held forever.
+        await vi.waitFor(() => expect(finish).toHaveLength(2), { timeout: 10_000 });
+        expect(active).toBe(2);
+        finish.splice(0).forEach((release) => release());
+        const results = await Promise.all(runs);
+        expect(results.map((r) => r.answerText)).toEqual(["ok", "ok", "ok"]);
+        expect(peakActive).toBe(2);
+      } finally {
+        controller.abort();
+        finish.splice(0).forEach((release) => release());
+        await settled;
+        await server.close();
       }
-      const results = await Promise.all(runs);
-      expect(results.map((r) => r.answerText)).toEqual(["ok", "ok", "ok"]);
-      expect(peakActive).toBe(2);
-
-      await server.close();
     },
+    30_000,
   );
 });
 
@@ -1732,6 +1797,138 @@ describe("client browser-config allowlist", () => {
     expect(pickClientBrowserConfig(null)).toEqual({});
   });
 });
+
+describe("remote run body limit", () => {
+  test.skipIf(!CAN_LISTEN_LOCALHOST)(
+    "returns 413 and does not start the browser once the body passes the cap",
+    async () => {
+      let runs = 0;
+      const server = await createRemoteServer(
+        {
+          host: "127.0.0.1",
+          port: 0,
+          token: "secret",
+          maxConcurrentRuns: 1,
+          maxQueuedRuns: 0,
+          logger: () => {},
+        },
+        {
+          maxRequestBodyBytes: 32,
+          runBrowser: async () => {
+            runs += 1;
+            return {
+              answerText: "hi",
+              answerMarkdown: "hi",
+              tookMs: 1,
+              answerTokens: 1,
+              answerChars: 2,
+            };
+          },
+        },
+      );
+      try {
+        const oversized = await postRunBody(
+          server.port,
+          JSON.stringify({ prompt: "x".repeat(64) }),
+        );
+        expect(oversized.statusCode).toBe(413);
+        expect(oversized.json).toEqual({ error: "payload_too_large" });
+        expect(runs).toBe(0);
+
+        const chunked = await postRunBody(server.port, JSON.stringify({ prompt: "y".repeat(64) }), {
+          chunked: true,
+        });
+        expect(chunked.statusCode).toBe(413);
+        expect(chunked.json).toEqual({ error: "payload_too_large" });
+        expect(runs).toBe(0);
+
+        const unfinished = await postRunBody(
+          server.port,
+          JSON.stringify({ prompt: "z".repeat(64) }),
+          { chunked: true, unfinished: true },
+        );
+        expect(unfinished.statusCode).toBe(413);
+        expect(unfinished.json).toEqual({ error: "payload_too_large" });
+        expect(runs).toBe(0);
+
+        const accepted = await postRunBody(server.port, JSON.stringify({ prompt: "x".repeat(19) }));
+        expect(accepted.statusCode).toBe(200);
+        expect(runs).toBe(1);
+
+        const health = await httpGetJson({
+          hostname: "127.0.0.1",
+          port: server.port,
+          path: "/health",
+          token: "secret",
+        });
+        expect(health.statusCode).toBe(200);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+});
+
+function postRunBody(
+  port: number,
+  body: string,
+  options: { chunked?: boolean; unfinished?: boolean } = {},
+): Promise<{ statusCode: number; json: Record<string, unknown> | null }> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (value: { statusCode: number; json: Record<string, unknown> | null }) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const headers: Record<string, string> = {
+      authorization: "Bearer secret",
+      "content-type": "application/json",
+    };
+    if (options.chunked) headers["transfer-encoding"] = "chunked";
+    else headers["content-length"] = String(Buffer.byteLength(body));
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/runs",
+        method: "POST",
+        headers,
+      },
+      (res) => {
+        res.setEncoding("utf8");
+        let raw = "";
+        res.on("data", (chunk: string) => {
+          raw += chunk;
+        });
+        res.on("end", () => {
+          let json: Record<string, unknown> | null = null;
+          try {
+            const parsed = raw.length ? JSON.parse(raw) : null;
+            json =
+              parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+          } catch {
+            json = null;
+          }
+          finish({ statusCode: res.statusCode ?? 0, json });
+        });
+      },
+    );
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    if (options.chunked) {
+      req.write(body.slice(0, 8));
+      req.write(body.slice(8));
+      if (!options.unfinished) req.end();
+      return;
+    }
+    req.end(body);
+  });
+}
 
 describe("advertised addresses", () => {
   test.skipIf(!CAN_LISTEN_LOCALHOST)("a loopback bind advertises only loopback", async () => {

@@ -36,14 +36,19 @@ running   gpt-5.2-pro   api     03/01 09:22 AM      1400        -  │  └─ i
 pending   gpt-5.2-pro   api     03/01 09:25 AM       900        -  └─ risk-check
 ```
 
+## Token usage and cost
+
+API usage summaries and saved sessions include reported reasoning tokens. Gemini's thought tokens are included in output usage; OpenAI reasoning is already part of output, and xAI reasoning is added only when the reported total identifies it as separate. Reasoning is a breakdown of output, not an additional amount to add to the total. Costs are estimates based on these counts and Oracle's configured rates.
+
 ## Replaying
 
 ```bash
 oracle session <id>            # print metadata + answer
-oracle session <id> --render   # print the prompt that was sent
+oracle session <id> --path     # print stored session paths
+oracle session <id> --render   # render the stored prompt and answer as Markdown
 ```
 
-Use the slug or a unique id prefix; Oracle resolves both.
+Use the slug or a unique id prefix; Oracle resolves both. `session` and `status` accept `--model <name>` to filter a listing or replay one model’s output. For replay, `--hide-prompt` omits the stored prompt, `--render` requests Markdown rendering, and `--verbose-render` shows rendering diagnostics. Both commands render automatically on a rich terminal; redirected output remains plain text.
 
 ## Reattach
 
@@ -185,3 +190,5 @@ Pair `--slug` with conventional prefixes for browseability:
 - `dr-…` — Deep Research run
 
 Then `oracle status --hours 720 | grep arch-` shows your last month of architecture work.
+
+Recovery honors the saved `keepBrowser` setting for Chrome it launches. With `keepBrowser: false`, recovery releases its browser when finished; borrowed browsers and browsers with another active Oracle session stay open.
