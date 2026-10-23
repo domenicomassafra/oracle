@@ -1220,13 +1220,14 @@ function buildModelSelectionExpression(
     const hasModelLikeMenuText = (node) => {
       const text = normalizeText(node?.textContent ?? '');
       return (
-        isLatestModelLabel(node?.textContent ?? '') ||
+        isGpt6ModelLabel(node?.textContent ?? '') ||
         text.includes('instant') ||
         text.includes('thinking') ||
         labelHasProWord(text) ||
         text.includes('5 5') ||
         text.includes('5 4') ||
         text.includes('5 2') ||
+        text.includes('gpt 6') ||
         text.includes('gpt 5') ||
         text.includes('gpt5')
       );

@@ -1299,10 +1299,11 @@ describe("browser model selection matchers", () => {
     expect(result).toEqual({ status: "already-selected", label: "5.6 Sol Extra High" });
   });
 
-  it("selects the GPT-5.6 Sol model row", async () => {
-    await expect(
-      evaluateMenuModelSelectionExpression("GPT-5.6 Sol", { label: "GPT-5.6 Sol" }),
-    ).resolves.toEqual({ status: "switched", label: "GPT-5.6 Sol" });
+  it.each(["GPT-5.6 Sol", "GPT-6"])("selects the %s model row", async (label) => {
+    await expect(evaluateMenuModelSelectionExpression(label, { label })).resolves.toEqual({
+      status: "switched",
+      label,
+    });
   });
 
   it("opens the current GPT-5.x version submenu before selecting GPT-5.6 Sol", async () => {
