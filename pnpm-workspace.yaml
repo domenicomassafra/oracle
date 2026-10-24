@@ -1,5 +1,5 @@
 overrides:
-  devtools-protocol: 0.0.1721318
+  devtools-protocol: 0.0.1721602
   hono: 4.13.13
   "@hono/node-server": 2.1.5
   fast-uri: 4.2.2
@@ -11,3 +11,6 @@ allowBuilds:
   esbuild: true
 
 minimumReleaseAge: 2880
+# Adopt the OSC progress replay fix without relaxing the cooldown for future releases.
+minimumReleaseAgeExclude:
+  - markdansi@0.3.7
