@@ -118,10 +118,12 @@ export const DEEP_RESEARCH_AUTO_CONFIRM_WAIT_MS = 70_000;
 export const DEEP_RESEARCH_DEFAULT_TIMEOUT_MS = 2_400_000;
 // Turn action labels are localized and have no data-testid in the Chat/Work layout.
 // ja-JP observed 2026-10-03: Copy -> コピーする, Regenerate response -> 回答を再生成.
+// it-IT observed 2026-10-25: the finished Chat/Work turn has an unclassed
+// "Rigenera risposta" button; its copy button is simply "Copia".
 // The user bubble's copy control reads メッセージをコピーする, so exact matches stay assistant-only.
 export const FINISHED_ACTIONS_SELECTOR = [
   ACTION_BAR_COPY_BUTTON_SELECTOR,
-  '.turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="回答を再生成"], button[data-testid="copy-turn-action-button"], button[data-testid="good-response-turn-action-button"], button[data-testid="bad-response-turn-action-button"], button[aria-label="Share"]',
+  '.turn-action-controls button[aria-label="Rate response"], .turn-action-controls button[aria-label="Regenerate response"], .turn-action-controls button[aria-label="回答を再生成"], button[aria-label="Rigenera risposta"], button[data-testid="copy-turn-action-button"], button[data-testid="good-response-turn-action-button"], button[data-testid="bad-response-turn-action-button"], button[aria-label="Share"]',
 ].join(", ");
 // Text of ChatGPT's polite live region once a turn finishes, per UI language.
 export const RESPONSE_COMPLETE_ANNOUNCEMENTS = [

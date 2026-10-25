@@ -142,6 +142,25 @@ describe("ChatGPT Chat/Work semantic layout", () => {
       ).toBe(false);
     },
   );
+  test("confirms a completed Italian answer with an unclassed regenerate control", () => {
+    const { document, turn, user } = fixture();
+    user.append(node("button", { "aria-label": "Copia messaggio" }));
+    turn.append(
+      node("div", {}, [
+        node("button", { "aria-label": "Copia" }),
+        node("button", { "aria-label": "Rigenera risposta" }),
+      ]),
+    );
+    expect(
+      evaluate(
+        buildCompletionVisibilityExpressionForTest({ messageId: "assistant-uuid" }, 0),
+        document,
+      ),
+    ).toBe(true);
+    expect(
+      evaluate(buildCompletionVisibilityExpressionForTest({ messageId: "other" }, 0), document),
+    ).toBe(false);
+  });
   test("does not treat the Japanese user-copy control as assistant completion", () => {
     const { document, user } = fixture();
     user.append(
