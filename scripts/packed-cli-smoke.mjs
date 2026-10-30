@@ -54,12 +54,17 @@ function launch(command, args = []) {
 
 function run(command, args, options = {}) {
   const invocation = launch(command, args);
-  return execFileSync(invocation.command, invocation.args, {
-    cwd: options.cwd ?? repoRoot,
-    encoding: "utf8",
-    stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
-    timeout: 240_000,
-  });
+  try {
+    return execFileSync(invocation.command, invocation.args, {
+      cwd: options.cwd ?? repoRoot,
+      encoding: "utf8",
+      stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
+      timeout: options.timeout ?? 240_000,
+    });
+  } catch (error) {
+    error.message = `${command} ${args[0] ?? ""}: ${error.message}`;
+    throw error;
+  }
 }
 
 async function verifyMcpShim(command, cwd) {
@@ -85,7 +90,9 @@ async function verifyMcpShim(command, cwd) {
   }
 }
 
+let smokeFailure;
 try {
+  console.log("Packed CLI smoke: pack");
   run("pnpm", ["pack", "--pack-destination", tmpRoot]);
   const tarball = readdirSync(tmpRoot).find((entry) => entry.endsWith(".tgz"));
   if (!tarball) {
@@ -94,9 +101,11 @@ try {
 
   const installDir = join(tmpRoot, "install");
   mkdirSync(installDir);
+  console.log("Packed CLI smoke: npm install");
   run("npm", ["init", "-y"], { cwd: installDir });
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", join(tmpRoot, tarball)], {
     cwd: installDir,
+    timeout: 600_000,
   });
   const binDir = join(installDir, "node_modules", ".bin");
   const shimSuffix = isWindows ? ".ps1" : "";
@@ -108,6 +117,7 @@ try {
     accessSync(join(binDir, "oracle.cmd"), constants.F_OK);
     accessSync(join(binDir, "oracle-mcp.cmd"), constants.F_OK);
   }
+  console.log("Packed CLI smoke: installed CLI help");
   const help = run(cliPath, ["--help", "--verbose"], { cwd: installDir });
 
   for (const expected of [
@@ -122,8 +132,24 @@ try {
       throw new Error(`packed CLI help is missing ${expected}`);
     }
   }
+  console.log("Packed CLI smoke: installed MCP stdio handshake");
   await verifyMcpShim(mcpPath, installDir);
   console.log("Packed CLI help and MCP handshake smoke: ok");
+} catch (error) {
+  smokeFailure = error;
+  throw error;
 } finally {
-  rmSync(tmpRoot, { recursive: true, force: true });
+  try {
+    // Windows may retain a just-closed shim or npm file handle briefly.
+    rmSync(tmpRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: isWindows ? 30 : 0,
+      retryDelay: 500,
+    });
+  } catch (cleanupError) {
+    if (!smokeFailure) throw cleanupError;
+    // Do not hide the original pack/install/CLI/MCP failure behind EPERM.
+    console.error(`Packed CLI smoke cleanup also failed: ${cleanupError}`);
+  }
 }
