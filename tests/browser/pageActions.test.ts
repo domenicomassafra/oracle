@@ -2934,6 +2934,101 @@ describe("uploadAttachmentFile", () => {
       .mockResolvedValue({ fileName: "oracle-browser-smoke.txt", size: 1 });
   });
 
+  test("fails closed for a PDF when the only input accepts images", async () => {
+    const imageInput = new FakeInputElement([]);
+    imageInput.setAttribute("accept", ".png,.jpg");
+    const document = new FakeDocument([
+      new FakeElement("form", { "data-testid": "composer" }, [
+        new FakeElement("textarea", { id: "prompt-textarea" }),
+        imageInput,
+        new FakeElement("button", { "data-testid": "send-button" }),
+      ]),
+    ]);
+    const dom = {
+      getDocument: vi.fn().mockResolvedValue({ root: { nodeId: 1 } }),
+      querySelector: vi.fn().mockResolvedValue({ nodeId: 2 }),
+      setFileInputFiles: vi.fn().mockRejectedValue(new Error("PDF reached image-only input")),
+    } as unknown as ChromeClient["DOM"];
+    let candidateOrder: number[] | undefined;
+    const runtime = {
+      evaluate: vi.fn(async ({ expression }: { expression: string }) => {
+        if (expression.includes("const acceptIsImageOnly")) {
+          const candidates = Function(
+            "document",
+            "HTMLElement",
+            "HTMLInputElement",
+            `return ${expression}`,
+          )(document, FakeElement, FakeInputElement);
+          candidateOrder = candidates.order;
+          return { result: { value: candidates } };
+        }
+        if (expression.includes("const normalizedExpected") && expression.includes("chipSignature"))
+          return { result: { value: { ui: false, input: false, chipCount: 0 } } };
+        return { result: { value: null } };
+      }),
+    } as unknown as ChromeClient["Runtime"];
+
+    await expect(
+      uploadAttachmentFile(
+        { runtime: withStableNavigation(runtime), dom },
+        { path: "/tmp/public-fixture.pdf", displayPath: "public-fixture.pdf" },
+        logger,
+      ),
+    ).rejects.toThrow("Unable to locate ChatGPT file attachment input.");
+    expect(candidateOrder).toEqual([]);
+    expect(dom.querySelector).not.toHaveBeenCalled();
+    expect(dom.setFileInputFiles).not.toHaveBeenCalled();
+  });
+
+  test.each([".avif", ".tif", ".tiff", ".svgz"])(
+    "keeps image-only accept=%s eligible for an image attachment",
+    async (extension) => {
+      const imageInput = new FakeInputElement([]);
+      imageInput.setAttribute("accept", extension);
+      const genericInput = new FakeInputElement([]);
+      genericInput.setAttribute("accept", ".pdf");
+      const document = new FakeDocument([
+        new FakeElement("form", { "data-testid": "composer" }, [
+          new FakeElement("textarea", { id: "prompt-textarea" }),
+          imageInput,
+          genericInput,
+          new FakeElement("button", { "data-testid": "send-button" }),
+        ]),
+      ]);
+      const dom = { getDocument: vi.fn().mockResolvedValue({ root: { nodeId: 1 } }) };
+      let candidateOrder: number[] | undefined;
+      const runtime = {
+        evaluate: vi.fn(async ({ expression }: { expression: string }) => {
+          if (expression.includes("const acceptIsImageOnly")) {
+            const candidates = Function(
+              "document",
+              "HTMLElement",
+              "HTMLInputElement",
+              `return ${expression}`,
+            )(document, FakeElement, FakeInputElement);
+            candidateOrder = candidates.order;
+            throw new Error("candidate selection captured before upload");
+          }
+          if (
+            expression.includes("const normalizedExpected") &&
+            expression.includes("chipSignature")
+          )
+            return { result: { value: { ui: false, input: false, chipCount: 0 } } };
+          return { result: { value: null } };
+        }),
+      } as unknown as ChromeClient["Runtime"];
+
+      await expect(
+        uploadAttachmentFile(
+          { runtime: withStableNavigation(runtime), dom: dom as never },
+          { path: `/tmp/fixture${extension}`, displayPath: `fixture${extension}` },
+          logger,
+        ),
+      ).rejects.toThrow("candidate selection captured");
+      expect(candidateOrder).toEqual([1, 0]);
+    },
+  );
+
   test.each([
     [".png,.jpg", [1]],
     ["image/png,image/jpeg", [1]],
