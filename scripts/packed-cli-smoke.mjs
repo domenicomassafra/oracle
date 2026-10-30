@@ -10,7 +10,7 @@ import {
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -22,15 +22,29 @@ const isWindows = process.platform === "win32";
 function launch(command, args = []) {
   if (!isWindows) return { command, args };
 
+  // The pnpm/action-setup runner can install pnpm.cmd without pnpm.ps1.
+  // Invoke package-manager JavaScript entrypoints with Node and literal argv.
+  if (command === "pnpm" || command === "npm") {
+    const candidates =
+      command === "pnpm"
+        ? [
+            process.env.npm_execpath,
+            process.env.PNPM_HOME && join(process.env.PNPM_HOME, "..", "pnpm", "bin", "pnpm.cjs"),
+          ]
+        : [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")];
+    const entrypoint = candidates.find(
+      (candidate) => candidate && /\.(?:c|m)?js$/i.test(candidate) && existsSync(candidate),
+    );
+    if (!entrypoint) throw new Error(`Missing Windows package-manager entrypoint: ${command}`);
+    return { command: process.execPath, args: [entrypoint, ...args] };
+  }
+
   // npm creates .ps1 wrappers alongside .cmd on Windows. -File receives argv
   // directly, so percent signs and whitespace never pass through cmd expansion.
   const shim =
     command.includes("\\") || command.includes("/")
       ? command.replace(/\.cmd$/i, ".ps1")
-      : (process.env.PATH ?? "")
-          .split(delimiter)
-          .map((entry) => join(entry.replace(/^"|"$/g, ""), `${command}.ps1`))
-          .find((entry) => existsSync(entry));
+      : undefined;
   if (!shim || !existsSync(shim)) throw new Error(`Missing Windows PowerShell shim: ${command}`);
   return {
     command: "powershell.exe",
