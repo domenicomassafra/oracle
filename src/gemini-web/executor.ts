@@ -423,6 +423,7 @@ export function createGeminiWebExecutor(
           : controller.signal;
 
         let response: GeminiWebResponse;
+        let submittedModel = model;
 
         try {
           if (editImagePath) {
@@ -445,6 +446,7 @@ export function createGeminiWebExecutor(
               signal: deliverySignal,
               allowModelFallback: geminiOptions.allowModelFallback,
             });
+            submittedModel = out.effectiveModel;
             response = {
               text: out.text ?? null,
               thoughts: geminiOptions.showThoughts ? out.thoughts : null,
@@ -476,6 +478,7 @@ export function createGeminiWebExecutor(
               signal: deliverySignal,
               allowModelFallback: geminiOptions.allowModelFallback,
             });
+            submittedModel = out.effectiveModel;
             response = {
               text: out.text ?? null,
               thoughts: geminiOptions.showThoughts ? out.thoughts : null,
@@ -505,6 +508,7 @@ export function createGeminiWebExecutor(
               signal: deliverySignal,
               allowModelFallback: geminiOptions.allowModelFallback,
             });
+            submittedModel = out.effectiveModel;
             response = {
               text: out.text ?? null,
               thoughts: geminiOptions.showThoughts ? out.thoughts : null,
@@ -529,6 +533,7 @@ export function createGeminiWebExecutor(
         }
 
         const tookMs = Date.now() - startTime;
+        log?.(`[gemini-web] Submitted model: ${submittedModel} (not verified by provider)`);
         log?.(`[gemini-web] Completed in ${tookMs}ms`);
 
         return {
@@ -537,6 +542,16 @@ export function createGeminiWebExecutor(
           tookMs,
           answerTokens: estimateTokenCount(answerText),
           answerChars: answerText.length,
+          modelSelection: {
+            requestedModel: model,
+            resolvedLabel: submittedModel,
+            strategy: "select",
+            status: submittedModel === model ? "skipped" : "switched-best-effort",
+            // The Gemini web transport reports the submitted model, not an attested served model.
+            verified: false,
+            source: "gemini-web-client",
+            capturedAt: new Date().toISOString(),
+          },
         };
       },
     };

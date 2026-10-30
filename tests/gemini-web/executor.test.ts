@@ -336,6 +336,31 @@ describe("gemini-web executor", () => {
     );
   });
 
+  it("reports a Gemini fallback attempt without attesting the served model", async () => {
+    runGeminiWebWithFallback.mockResolvedValueOnce({
+      rawResponseText: "",
+      text: "ok",
+      thoughts: null,
+      metadata: null,
+      images: [],
+      effectiveModel: "gemini-3.5-flash-lite",
+    });
+    const { createGeminiWebExecutor } = await import("../../src/gemini-web/executor.js");
+    const result = await createGeminiWebExecutor({})({
+      prompt: "public fixture",
+      attachments: [],
+      config: { desiredModel: "Gemini 3 Pro", chromeProfile: "Default" },
+      log: () => {},
+    });
+    expect(result.modelSelection).toMatchObject({
+      requestedModel: "gemini-3.1-pro",
+      resolvedLabel: "gemini-3.5-flash-lite",
+      status: "switched-best-effort",
+      verified: false,
+      source: "gemini-web-client",
+    });
+  });
+
   it("uses inline cookies when cookie sync is disabled", async () => {
     const { createGeminiWebExecutor } = await import("../../src/gemini-web/executor.js");
     const exec = createGeminiWebExecutor({});

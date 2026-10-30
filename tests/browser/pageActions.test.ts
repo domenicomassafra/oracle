@@ -2934,6 +2934,60 @@ describe("uploadAttachmentFile", () => {
       .mockResolvedValue({ fileName: "oracle-browser-smoke.txt", size: 1 });
   });
 
+  test.each([
+    [".png,.jpg", [1]],
+    ["image/png,image/jpeg", [1]],
+    [".png,image/jpeg", [1]],
+    [".png,.exe", [0, 1]],
+    ["image/*,video/*", [0, 1]],
+  ] as const)(
+    "classifies file input accept=%s without routing a PDF to image-only inputs",
+    async (accept, expectedOrder) => {
+      const imageInput = new FakeInputElement([]);
+      imageInput.setAttribute("accept", accept);
+      const genericInput = new FakeInputElement([]);
+      genericInput.setAttribute("accept", ".pdf");
+      const document = new FakeDocument([
+        new FakeElement("form", { "data-testid": "composer" }, [
+          new FakeElement("textarea", { id: "prompt-textarea" }),
+          imageInput,
+          genericInput,
+          new FakeElement("button", { "data-testid": "send-button" }),
+        ]),
+      ]);
+      const dom = { getDocument: vi.fn().mockResolvedValue({ root: { nodeId: 1 } }) };
+      let candidateOrder: number[] | undefined;
+      const runtime = {
+        evaluate: vi.fn(async ({ expression }: { expression: string }) => {
+          if (expression.includes("const acceptIsImageOnly")) {
+            const candidates = Function(
+              "document",
+              "HTMLElement",
+              "HTMLInputElement",
+              `return ${expression}`,
+            )(document, FakeElement, FakeInputElement);
+            candidateOrder = candidates.order;
+            throw new Error("candidate selection captured before any file upload");
+          }
+          if (
+            expression.includes("const normalizedExpected") &&
+            expression.includes("chipSignature")
+          )
+            return { result: { value: { ui: false, input: false, chipCount: 0 } } };
+          return { result: { value: null } };
+        }),
+      } as unknown as ChromeClient["Runtime"];
+      await expect(
+        uploadAttachmentFile(
+          { runtime: withStableNavigation(runtime), dom: dom as never },
+          { path: "/tmp/public-fixture.pdf", displayPath: "public-fixture.pdf" },
+          logger,
+        ),
+      ).rejects.toThrow("candidate selection captured");
+      expect(candidateOrder).toEqual(expectedOrder);
+    },
+  );
+
   afterEach(() => {
     transferSpy.mockRestore();
   });
