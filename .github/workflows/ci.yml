@@ -50,8 +50,9 @@ jobs:
       - name: Prove shared Chrome controller lifetime on Windows
         if: matrix.os == 'windows-latest'
         run: node scripts/shared-chrome-lifecycle-proof.mjs
-      - run: pnpm run test:packed-cli
-        if: matrix.os == 'ubuntu-latest'
+      - name: Verify installed CLI and MCP shims (including Windows percent paths)
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        run: pnpm run test:packed-cli
 
   # Linux parity smokes for CDP disconnect classification and attachment sends.
   # No ChatGPT auth; exercises real Chromium DevTools and disk-backed uploads.
