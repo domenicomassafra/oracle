@@ -68,11 +68,16 @@ function run(command, args, options = {}) {
 }
 
 async function verifyMcpShim(command, cwd) {
-  const invocation = launch(command);
+  // The PowerShell wrapper did not complete the MCP handshake in Windows CI.
+  // Exercise the installed .cmd shim instead. Its name is relative to cwd so
+  // cmd.exe never sees (and expands) %OS% in the absolute temp directory.
+  const invocation = isWindows
+    ? { command: "cmd.exe", args: ["/d", "/s", "/c", "oracle-mcp.cmd"] }
+    : launch(command);
   const client = new Client({ name: "oracle-packed-smoke", version: "1.0.0" });
   const transport = new StdioClientTransport({
     ...invocation,
-    cwd,
+    cwd: isWindows ? dirname(command) : cwd,
     stderr: "pipe",
     env: { ...process.env, ORACLE_DISABLE_KEYTAR: "1", ORACLE_HOME_DIR: join(tmpRoot, "home") },
   });
