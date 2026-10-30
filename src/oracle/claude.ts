@@ -11,34 +11,35 @@ const DEFAULT_CLAUDE_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 function extractPrompt(body: OracleRequestBody): string {
-  const first = body.input?.[0]?.content?.[0];
-  if (first && first.type === "input_text") {
-    return first.text ?? "";
-  }
-  return "";
+  return (body.input ?? [])
+    .flatMap((item) => item.content ?? [])
+    .map((piece) => (piece.type === "input_text" ? piece.text : ""))
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 async function callClaude({
   apiKey,
   model,
-  prompt,
+  body,
   endpoint,
   stream = false,
 }: {
   apiKey: string;
   model: string;
-  prompt: string;
+  body: OracleRequestBody;
   endpoint?: string;
   stream?: boolean;
 }): Promise<Response> {
   const url = endpoint?.trim() || DEFAULT_CLAUDE_ENDPOINT;
   const payload: Record<string, unknown> = {
     model,
-    max_tokens: 2048,
+    max_tokens: body.max_output_tokens ?? 2048,
+    ...(body.instructions?.trim() ? { system: body.instructions } : {}),
     messages: [
       {
         role: "user",
-        content: prompt,
+        content: extractPrompt(body),
       },
     ],
     stream,
@@ -106,11 +107,10 @@ export function createClaudeClient(
   const modelId = resolveClaudeModelId(resolvedModelId ?? modelName);
 
   const stream = async (body: OracleRequestBody): Promise<ResponseStreamLike> => {
-    const prompt = extractPrompt(body);
     const resp = await callClaude({
       apiKey,
       model: modelId,
-      prompt,
+      body,
       stream: false,
       endpoint: baseUrl,
     });
@@ -128,11 +128,10 @@ export function createClaudeClient(
   };
 
   const create = async (body: OracleRequestBody): Promise<OracleResponse> => {
-    const prompt = extractPrompt(body);
     const resp = await callClaude({
       apiKey,
       model: modelId,
-      prompt,
+      body,
       stream: false,
       endpoint: baseUrl,
     });
