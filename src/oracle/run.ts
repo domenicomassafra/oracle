@@ -305,7 +305,8 @@ export async function runOracle(
     fsModule,
     maxFileSizeBytes: options.maxFileSizeBytes,
   });
-  const searchEnabled = options.search !== false;
+  const searchAllowed = modelConfig.supportsSearch !== false;
+  const searchEnabled = searchAllowed && options.search !== false;
   logVerbose(`cwd: ${cwd}`);
   let pendingNoFilesTip: string | null = null;
   let pendingShortPromptTip: string | null = null;
@@ -427,6 +428,9 @@ export async function runOracle(
       log(
         dim("Background runs are not supported for this model; streaming in foreground instead."),
       );
+    }
+    if (!searchAllowed && options.search !== false) {
+      log(dim("Search tool is not supported for this model; ignoring --search."));
     }
     if (options.reasoningMode) {
       log(dim(`Reasoning mode: ${options.reasoningMode}`));
