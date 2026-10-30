@@ -46,8 +46,20 @@ describe("claude client", () => {
   });
 
   test("forwards all input text, system instructions and output limit through both request paths", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      text: async () => JSON.stringify({ id: "mock", content: [{ text: "done" }] }),
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const request = JSON.parse(String(init.body)) as { stream: boolean };
+      if (request.stream) {
+        const events = [
+          'event: message_start\ndata: {"type":"message_start","message":{"id":"mock","usage":{"input_tokens":1}}}\n\n',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}\n\n',
+          'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":2}}\n\n',
+          'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+        ];
+        return new Response(events.join(""), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response(JSON.stringify({ id: "mock", content: [{ text: "done" }] }));
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -82,7 +94,7 @@ describe("claude client", () => {
     expect((await stream.finalResponse()).output_text?.[0]).toBe("done");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const [url, init] of fetchMock.mock.calls) {
+    for (const [index, [url, init]] of fetchMock.mock.calls.entries()) {
       expect(url).toBe("https://mock.invalid/v1/messages");
       expect(init?.method).toBe("POST");
       expect(init?.headers).toEqual({
@@ -95,7 +107,7 @@ describe("claude client", () => {
         max_tokens: 777,
         system: "Follow these system rules.",
         messages: [{ role: "user", content: "first\n\nsecond\n\nthird" }],
-        stream: false,
+        stream: index === 1,
       });
     }
   });
