@@ -1,16 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const repoRoot = process.cwd();
 const tmpRoot = mkdtempSync(join(tmpdir(), "oracle-packed-cli-"));
+const isWindows = process.platform === "win32";
 
 function run(command, args, options = {}) {
-  return execFileSync(command, args, {
+  const executable = isWindows ? (process.env.ComSpec ?? "cmd.exe") : command;
+  const commandArgs = isWindows
+    ? ["/d", "/s", "/c", `"${[command, ...args].map((arg) => `"${arg}"`).join(" ")}"`]
+    : args;
+  return execFileSync(executable, commandArgs, {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
     stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: isWindows,
   });
 }
 
@@ -27,16 +33,12 @@ try {
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", join(tmpRoot, tarball)], {
     cwd: installDir,
   });
-  const cliPath = join(
-    installDir,
-    "node_modules",
-    "@steipete",
-    "oracle",
-    "dist",
-    "bin",
-    "oracle-cli.js",
-  );
-  const help = run(process.execPath, [cliPath, "--help", "--verbose"], { cwd: installDir });
+  const binDir = join(installDir, "node_modules", ".bin");
+  const shimSuffix = isWindows ? ".cmd" : "";
+  const cliPath = join(binDir, `oracle${shimSuffix}`);
+  accessSync(cliPath, isWindows ? constants.F_OK : constants.X_OK);
+  accessSync(join(binDir, `oracle-mcp${shimSuffix}`), isWindows ? constants.F_OK : constants.X_OK);
+  const help = run(cliPath, ["--help", "--verbose"], { cwd: installDir });
 
   for (const expected of [
     "--no-azure",
