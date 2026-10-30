@@ -545,7 +545,9 @@ export async function uploadAttachmentFile(
     if (!normalized) return false;
     return expectedNamePattern?.test(normalized) ?? false;
   };
-  const isImageAttachment = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i.test(expectedName);
+  const isImageAttachment = /\.(avif|bmp|gif|heic|heif|jpe?g|png|svgz?|tiff?|webp)$/i.test(
+    expectedName,
+  );
   const attachmentUiTimeoutMs = 25_000;
   const attachmentUiSignalWaitMs = 5_000;
 
@@ -641,13 +643,17 @@ export async function uploadAttachmentFile(
         return total + count;
       }, 0);
       const isImageAttachment = ${JSON.stringify(isImageAttachment)};
+      const imageExtensions = new Set([
+        '.avif', '.bmp', '.gif', '.heic', '.heif', '.jpeg', '.jpg',
+        '.png', '.svg', '.svgz', '.tif', '.tiff', '.webp',
+      ]);
       const acceptIsImageOnly = (accept) => {
         if (!accept) return false;
         const parts = String(accept)
           .split(',')
           .map((p) => p.trim().toLowerCase())
           .filter(Boolean);
-        return parts.length > 0 && parts.every((p) => p.startsWith('image/'));
+        return parts.length > 0 && parts.every((p) => p.startsWith('image/') || imageExtensions.has(p));
       };
       const chipContainer = scope ?? document;
         const chipSelector = '[data-testid*="attachment"],[data-testid*="chip"],[data-testid*="upload"],[data-testid*="file"],[aria-label*="Remove"],[aria-label*="remove"]';
@@ -773,10 +779,7 @@ export async function uploadAttachmentFile(
       // When the attachment isn't an image, avoid inputs that only accept images.
       // Some ChatGPT surfaces expose multiple file inputs (e.g. image-only vs generic upload).
       if (!isImageAttachment) {
-        const nonImage = candidates.filter((candidate) => !candidate.imageOnly);
-        if (nonImage.length > 0) {
-          candidates = nonImage;
-        }
+        candidates = candidates.filter((candidate) => !candidate.imageOnly);
       }
 
       // Prefer higher scores first.

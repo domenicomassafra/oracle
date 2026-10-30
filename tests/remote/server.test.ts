@@ -584,6 +584,9 @@ describe("remote browser service", () => {
     "does not let a remote caller choose a manual-login profile path for a named account",
     async () => {
       const tmpDir = await mkdtemp(path.join(os.tmpdir(), "oracle-remote-account-test-"));
+      const serverOwnedProfileDir = path.join(tmpDir, "server-owned", "primary");
+      const fallbackProfileDir = path.join(tmpDir, "server-owned", "fallback");
+      const clientControlledProfileDir = path.join(tmpDir, "client-controlled", "profile");
       setOracleHomeDirOverrideForTest(tmpDir);
       await writeFile(
         path.join(tmpDir, "config.json"),
@@ -592,7 +595,7 @@ describe("remote browser service", () => {
             accounts: {
               primary: {
                 providers: ["chatgpt"],
-                profileDir: "/server-owned/primary",
+                profileDir: serverOwnedProfileDir,
                 chromeProfile: "Profile 2",
                 capabilities: ["text", "image"],
               },
@@ -607,14 +610,14 @@ describe("remote browser service", () => {
           token: "secret",
           logger: () => {},
           manualLoginDefault: true,
-          manualLoginProfileDir: "/server-owned/fallback",
+          manualLoginProfileDir: fallbackProfileDir,
         },
         {
           runBrowser: async (options) => {
             expect(options.config).toMatchObject({
-              accountProfileKey: redactProfileKey("/server-owned/primary", "Profile 2"),
+              accountProfileKey: redactProfileKey(serverOwnedProfileDir, "Profile 2"),
               manualLogin: true,
-              manualLoginProfileDir: "/server-owned/primary",
+              manualLoginProfileDir: serverOwnedProfileDir,
               manualLoginChromeProfile: "Profile 2",
               keepBrowser: true,
             });
@@ -636,8 +639,8 @@ describe("remote browser service", () => {
         })({
           prompt: "remote named account",
           config: {
-            accountProfileKey: redactProfileKey("/server-owned/primary", "Profile 2"),
-            manualLoginProfileDir: "/client-controlled/profile",
+            accountProfileKey: redactProfileKey(serverOwnedProfileDir, "Profile 2"),
+            manualLoginProfileDir: clientControlledProfileDir,
           },
         });
         expect(result.answerText).toBe("done");

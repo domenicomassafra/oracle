@@ -131,19 +131,22 @@ async function waitForComposer(page: Page, selector: string, timeout = 30_000): 
 async function submitClaude(page: Page, prompt: string): Promise<string> {
   await waitForComposer(page, CLAUDE_COMPOSER_SELECTOR);
   const initialCount = await page.$$eval(".font-claude-response", (nodes) => nodes.length);
-  const typed = await page.evaluate(({ value, selector }) => {
-    const editor = document.querySelector(selector);
-    if (!(editor instanceof HTMLElement)) return false;
-    editor.focus();
-    document.execCommand("selectAll");
-    document.execCommand("insertText", false, value);
-    editor.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
-    );
-    // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
-    // length equality is unreliable for long prompts; any real content is enough.
-    return (editor.textContent?.trim().length ?? 0) > 0;
-  }, { value: prompt, selector: CLAUDE_COMPOSER_SELECTOR });
+  const typed = await page.evaluate(
+    ({ value, selector }) => {
+      const editor = document.querySelector(selector);
+      if (!(editor instanceof HTMLElement)) return false;
+      editor.focus();
+      document.execCommand("selectAll");
+      document.execCommand("insertText", false, value);
+      editor.dispatchEvent(
+        new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
+      );
+      // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
+      // length equality is unreliable for long prompts; any real content is enough.
+      return (editor.textContent?.trim().length ?? 0) > 0;
+    },
+    { value: prompt, selector: CLAUDE_COMPOSER_SELECTOR },
+  );
   if (!typed) throw new Error("Claude prompt composer is not ready.");
   await page.keyboard.press("Enter");
   await page.waitForFunction(
@@ -173,19 +176,22 @@ async function submitGrok(page: Page, prompt: string): Promise<string> {
     '[data-testid="assistant-message"]',
     (nodes) => nodes.length,
   );
-  const typed = await page.evaluate(({ value, selector }) => {
-    const editor = document.querySelector(selector);
-    if (!(editor instanceof HTMLElement)) return false;
-    editor.focus();
-    document.execCommand("selectAll");
-    document.execCommand("insertText", false, value);
-    editor.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
-    );
-    // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
-    // length equality is unreliable for long prompts; any real content is enough.
-    return (editor.textContent?.trim().length ?? 0) > 0;
-  }, { value: prompt, selector: GROK_COMPOSER_SELECTOR });
+  const typed = await page.evaluate(
+    ({ value, selector }) => {
+      const editor = document.querySelector(selector);
+      if (!(editor instanceof HTMLElement)) return false;
+      editor.focus();
+      document.execCommand("selectAll");
+      document.execCommand("insertText", false, value);
+      editor.dispatchEvent(
+        new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
+      );
+      // ProseMirror normalizes multi-line pastes (blocks, spacing), so exact
+      // length equality is unreliable for long prompts; any real content is enough.
+      return (editor.textContent?.trim().length ?? 0) > 0;
+    },
+    { value: prompt, selector: GROK_COMPOSER_SELECTOR },
+  );
   if (!typed) throw new Error("Grok prompt composer is not ready.");
   await new Promise((resolve) => setTimeout(resolve, 300));
   const sent = await page.evaluate(() => {
