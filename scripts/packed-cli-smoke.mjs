@@ -134,22 +134,25 @@ try {
   }
   console.log("Packed CLI smoke: installed MCP stdio handshake");
   await verifyMcpShim(mcpPath, installDir);
-  console.log("Packed CLI help and MCP handshake smoke: ok");
 } catch (error) {
   smokeFailure = error;
-  throw error;
-} finally {
-  try {
-    // Windows may retain a just-closed shim or npm file handle briefly.
-    rmSync(tmpRoot, {
-      recursive: true,
-      force: true,
-      maxRetries: isWindows ? 30 : 0,
-      retryDelay: 500,
-    });
-  } catch (cleanupError) {
-    if (!smokeFailure) throw cleanupError;
-    // Do not hide the original pack/install/CLI/MCP failure behind EPERM.
-    console.error(`Packed CLI smoke cleanup also failed: ${cleanupError}`);
-  }
 }
+let cleanupFailure;
+try {
+  // Windows may retain a just-closed shim or npm file handle briefly.
+  rmSync(tmpRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: isWindows ? 30 : 0,
+    retryDelay: 500,
+  });
+} catch (error) {
+  cleanupFailure = error;
+}
+if (smokeFailure) {
+  // Do not hide the original pack/install/CLI/MCP failure behind EPERM.
+  if (cleanupFailure) console.error(`Packed CLI smoke cleanup also failed: ${cleanupFailure}`);
+  throw smokeFailure;
+}
+if (cleanupFailure) throw cleanupFailure;
+console.log("Packed CLI help and MCP handshake smoke: ok");
