@@ -15,89 +15,85 @@ respect its engine policy. `ORACLE_MCP_ENGINE_POLICY=browser-only` means API
 engine requests and multi-model fan-out are intentionally unavailable; do not
 work around that boundary or retry through a paid provider route.
 
-## Main use case (browser, GPT-5.6)
+## Main use case (browser, GPT-6)
 
-Use browser mode with GPT-5.6 when the ChatGPT account exposes it. GPT-5.6 Sol
-and GPT-5.6 Sol Pro are distinct targets: base Sol uses the Extra High effort
-setting, while Pro is a separate picker target for difficult or long-running
-work.
+Use browser mode with GPT-6 when the authorized ChatGPT account exposes it.
+Oracle already supports the GPT-6 picker, the `latest` alias, and verified
+effort selection. Select the model and effort explicitly; never mistake a
+generic Pro pill for proof of which model served the answer.
 
 Recommended defaults:
 
 - Engine: browser (`--engine browser`)
-- Base Sol: `--model gpt-5.6-sol`
-- Base Sol maximum reasoning: `--browser-thinking-time extra-high` (Extra High)
-- Explicit Pro effort on GPT-5.6 Sol: `--browser-thinking-time pro` (fails closed if Pro cannot be confirmed)
-- Browser GPT-5.5 with Pro effort: `--model gpt-5.5 --browser-thinking-time pro`
-- API Pro maximum reasoning: `--model gpt-5.6-sol --reasoning-mode pro --reasoning-effort max`
-- Fallback: explicitly use `--model gpt-5.5-pro` when GPT-5.6 is unavailable
+- GPT-6 browser: `--model gpt-6 --browser-thinking-time extra-high`
+- GPT-6 browser Pro: `--model gpt-6-pro` (fails closed if Pro cannot be verified)
+- GPT-6 API, only if separately authorized and cost-approved:
+  `--model gpt-6-astra --reasoning-mode pro`
+- Legacy fallback: use GPT-5.6 or GPT-5.5 **only if explicitly requested or
+  approved**. Never silently downgrade a GPT-6 request.
 - Attachments: directories/globs plus excludes; never attach secrets by default
 
-GPT-5.6 availability is account-dependent. Confirm the base Sol picker and
-retain model-selection evidence. A bare `Pro` picker label proves picker
-selection but does not, by itself, prove the server-side Pro generation.
+Model availability and Pro effort are account-dependent. Confirm the selected
+GPT-6 radio and effort before submitting; if unavailable, report the blocked
+request rather than silently switching to another model.
 
-## GPT-5.6 model selection
+## GPT-6 model selection
 
-This version supports GPT-5.6 on both surfaces, but Pro selection differs:
+Supported explicit targets:
 
-- `gpt-5.6`: follow the GPT-5.6 family default
-- `gpt-5.6-sol`: pin ChatGPT's `GPT-5.6 Sol` entry
-- Browser: `gpt-5-pro` selects ChatGPT's `Pro` target
-- API: `--reasoning-mode pro` enables Pro execution on `gpt-5.6-sol`; pair it with `--reasoning-effort max` for maximum reasoning
+- Browser `gpt-6`, `gpt-6-astra`, or `latest`: select the GPT-6 entry.
+- Browser `gpt-6-pro`: select GPT-6 with Pro effort.
+- API `gpt-6-astra`: select the GPT-6 API model; request Pro reasoning
+  explicitly when approved. `gpt-6-pro` is not an API model slug.
+- GPT-5.6 aliases remain compatible for **explicit legacy requests**, not as
+  the default recommendation.
 
-For base Sol, use:
+For a browser consultation, use:
 
 ```bash
-oracle --engine browser --browser-manual-login --model gpt-5.6-sol \
+oracle --engine browser --browser-manual-login --model gpt-6 \
   --browser-thinking-time extra-high \
   -p "<task>" --file "src/**"
 ```
 
-For GPT-5.6 Sol Pro through the Responses API, use:
+For a GPT-6 browser Pro consultation, use:
 
 ```bash
-oracle --engine api --model gpt-5.6-sol \
-  --reasoning-mode pro \
-  --reasoning-effort max \
+oracle --engine browser --browser-manual-login --model gpt-6-pro \
   -p "<task>" --file "src/**"
 ```
 
-Do not use `--model "GPT-5.6 Sol Pro"`. Pro is intentionally handled as a
-browser picker target and an API reasoning mode. Browser label validation rejects unknown future
-variants such as `gpt-5.6-luna` instead of silently falling back to Sol; API
-runs preserve such provider model IDs unchanged.
-
-Browser mode maps these aliases to ChatGPT's Sol picker. API and multi-model
-runs preserve the corresponding first-party OpenAI model IDs; provider-qualified
-and unrelated custom IDs remain pass-through values.
-
-The GPT-5.6 browser support depends on the unified Intelligence picker. It
-recognizes the current English and Chinese effort labels, avoids matching
-`高` inside `极高`, and re-queries the composer pill after React replaces it so
-selection verification cannot rely on a detached stale node.
+GPT-6 and Pro are independently verified in the browser. An observed picker
+selection does not prove backend execution identity; retain run receipts.
 
 ## Compatibility with npm 0.15.2
 
-Do not pass `gpt-5.6` or `gpt-5.6-sol` to an unpatched npm 0.15.2 install. That
-release can normalize those labels to `gpt-5.2`. Use the explicit fallback:
+The historical npm 0.15.2 release does not support the current model picker;
+do not use it to satisfy a GPT-6 request. Its explicit legacy fallback was:
 
 ```bash
 npx -y @steipete/oracle@0.15.2 --engine browser --model gpt-5.5-pro \
   -p "<task>" --file "src/**"
 ```
 
-After upgrading to a release containing the GPT-5.6 model-selection and
-unified-picker changes, verify all of the following before removing the
-fallback guidance: `--help --verbose` exposes the new options, browser dry-run
-resolves both aliases to GPT-5.6 Sol, API routing selects first-party OpenAI,
-and a live browser run records strict GPT-5.6 selection evidence.
+Verify that the installed CLI supports GPT-6 in `--help --verbose` and dry
+run before executing. Do not treat a successful historical fallback as GPT-6.
+
+## Image-generation requests
+
+Use Oracle's `chatgpt_image` MCP tool (or the supported browser image path)
+when the task is to generate an image. The image-generation capability, not
+the text reasoning model's version, determines the route. Do not require
+GPT-6/Pro merely because a picture is requested. Leave the `model` input
+unset unless a specific compatible model was authorized; verify a saved image
+with the requested dimensions and actual visual content before reporting
+success. A Canva attempt or a text-only answer is not an image artifact.
 
 ## Golden path
 
 1. Pick the smallest file set that still contains the truth.
 2. Preview the bundle with `--dry-run` and `--files-report`.
-3. Use browser mode for GPT-5.6; use API only when explicitly intended.
+3. Use browser mode for GPT-6; use API only when explicitly intended.
 4. If a run detaches or times out, reattach to the stored session instead of
    starting a duplicate.
 
@@ -114,7 +110,7 @@ and a live browser run records strict GPT-5.6 selection evidence.
   - `npx -y @steipete/oracle --dry-run summary --files-report -p "<task>" --file "src/**"`
 
 - Browser run:
-  - `oracle --engine browser --browser-manual-login --model gpt-5.6-sol --browser-thinking-time extra-high -p "<task>" --file "src/**"`
+  - `oracle --engine browser --browser-manual-login --model gpt-6 --browser-thinking-time extra-high -p "<task>" --file "src/**"`
 
 - Manual paste fallback:
   - `npx -y @steipete/oracle --render-markdown --copy-markdown -p "<task>" --file "src/**"`
@@ -148,7 +144,7 @@ are essential to the question.
 - Auto-selection uses API when `OPENAI_API_KEY` is set and browser otherwise.
 - Browser supports GPT models through ChatGPT and Gemini models through Gemini
   web. API-only models include `gpt-5.1-codex`.
-- Current model families include GPT-5.5/5.4/5.2/5.1, Gemini 3.x, and Claude
+- Current model families include GPT-6, legacy GPT-5.x, Gemini 3.x, and Claude
   4.x; availability depends on engine and provider.
 - API runs require explicit user consent because they may incur usage costs.
 - Browser attachments use `--browser-attachments auto|never|always`.
