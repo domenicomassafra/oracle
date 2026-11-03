@@ -46,7 +46,7 @@ Examples using an installed Oracle:
 oracle --engine api --model gpt-5.4 --wait \
   --prompt "Review this package metadata for compatibility risks." --file package.json
 
-oracle --engine browser --model gpt-5.6-sol --browser-thinking-time pro \
+oracle --engine browser --model gpt-6-pro \
   --prompt "Review this package metadata for compatibility risks." --file package.json
 
 oracle --render \
