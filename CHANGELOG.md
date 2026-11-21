@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.23.2 - 2026-11-21
 
 - Browser: preserve ChatGPT image-only replies and composer app-mention state, and report connection warnings and foreground worker exits promptly.
 
