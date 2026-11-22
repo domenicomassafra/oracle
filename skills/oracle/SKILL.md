@@ -81,13 +81,42 @@ run before executing. Do not treat a successful historical fallback as GPT-6.
 
 ## Image-generation requests
 
-Use Oracle's `chatgpt_image` MCP tool (or the supported browser image path)
-when the task is to generate an image. The image-generation capability, not
-the text reasoning model's version, determines the route. Do not require
-GPT-6/Pro merely because a picture is requested. Leave the `model` input
-unset unless a specific compatible model was authorized; verify a saved image
-with the requested dimensions and actual visual content before reporting
-success. A Canva attempt or a text-only answer is not an image artifact.
+Oracle is the shared browser transport for the ChatGPT and Gemini image
+surfaces; it is not a third image model. Under the owner's B-9 decision, use
+the browser route and an already-authorized subscription. Do not route image
+generation through a metered API or silently select a paid API engine.
+
+- **ChatGPT generation:** use `--engine browser --generate-image <output>`
+  with the authorized ChatGPT model/profile. ChatGPT browser runs save image
+  download artifacts when present. For an edit, attach the exact source with
+  `--file <source>` and request the edit while saving the generated result;
+  `--edit-image` is Gemini-only.
+- **Gemini generation:** use `--engine browser --model gemini-3.1-pro
+  --generate-image <output>`. For an edit, pass the exact source with
+  `--edit-image <source> --output <output>`.
+- **Gemini aspect ratios:** `--aspect` supports `1:1`, `3:4`, `4:3` and
+  `16:9`. ChatGPT browser generation uses the controls available in its UI;
+  do not claim an exact ratio unless the saved file confirms it.
+- **MCP:** use `chatgpt_image` when the caller exposes that tool and its
+  attachment/output contract fits the request. Do not create a second browser
+  automation script for the same ChatGPT or Gemini route.
+- **Remote host:** do not assume image generation works through `--remote-host`.
+  Remote Gemini image output is unsupported; remote ChatGPT image output
+  requires the host to advertise `generatedImages:true` and artifact protocol
+  v1. Prefer the local browser CLI unless the remote host capability is
+  explicitly confirmed.
+- **Image-only ChatGPT replies:** Oracle 0.23.0+ recognizes assistant image
+  turns that expose only `data-conversation-role`; keep the CLI at 0.23.0 or
+  newer so `--generate-image` can save these replies.
+- **Video:** Oracle does not generate video. `--youtube` analyzes a YouTube
+  video through Gemini; it does not create a clip. Route T2V/I2V to the
+  established video-production workflow (for this workspace, Google Flow or
+  A2E as selected by the task).
+
+The image-generation capability, not the text reasoning model's version,
+determines the route. Verify the saved image's dimensions, format and actual
+visual content before reporting success. A preview, a text-only answer or a
+queued browser run is not an image artifact.
 
 ## Golden path
 
