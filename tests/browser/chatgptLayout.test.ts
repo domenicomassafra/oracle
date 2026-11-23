@@ -161,6 +161,20 @@ describe("ChatGPT Chat/Work semantic layout", () => {
       evaluate(buildCompletionVisibilityExpressionForTest({ messageId: "other" }, 0), document),
     ).toBe(false);
   });
+  test("confirms a completed Italian answer when the turn only offers Copy", () => {
+    const { document, turn, user } = fixture();
+    const expression = buildCompletionVisibilityExpressionForTest(
+      { messageId: "assistant-uuid" },
+      0,
+    );
+    const actions = node("div", { "data-talvt-turn-state": "complete" });
+    user.append(node("button", { "aria-label": "Copia messaggio" }));
+    turn.append(actions);
+    expect(evaluate(expression, document)).toBe(false);
+
+    actions.append(node("button", { "aria-label": "Copia" }));
+    expect(evaluate(expression, document)).toBe(true);
+  });
   test("does not treat the Japanese user-copy control as assistant completion", () => {
     const { document, user } = fixture();
     user.append(
